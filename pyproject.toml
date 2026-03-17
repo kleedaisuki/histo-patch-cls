@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "histo-patch-cls"
+version = "0.1.0"
+description = "Patch-level classification of IDC in breast histopathology images"
+readme = "README.md"
+requires-python = ">=3.11"
+
+authors = [{ name = "moeSegFault", email = "guojiarui@mail.nankai.edu.cn" }]
+
+dependencies = [
+    # core
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "numpy>=1.26",
+    "pillow>=10.0",
+
+    # data
+    "kagglehub>=0.2.0",
+
+    # utils
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "black>=24.0", "ruff>=0.3", "mypy>=1.8"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# --------- tooling ---------
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
