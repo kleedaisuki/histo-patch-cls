@@ -13,9 +13,12 @@ from torch import Tensor
 from torch.utils.data import DataLoader, Dataset, Sampler, WeightedRandomSampler
 from torchvision import transforms as T
 
+from .utils import get_logger
+
 
 IMAGE_SUFFIXES: tuple[str, ...] = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
 TransformFactory = Callable[["ImageSchema"], T.Compose]
+LOGGER = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,13 +157,20 @@ class TransformRegistry:
 
     def register(self, name: str, factory: TransformFactory) -> None:
         """@brief 注册新变换；Register a new transform factory."""
+        LOGGER.debug("Registering transform factory: %s", name)
         self._registry[name] = factory
 
     def build(self, name: str, schema: ImageSchema) -> T.Compose:
         """@brief 根据名字构建变换；Build transform by name."""
         if name not in self._registry:
             available = ", ".join(sorted(self._registry))
+            LOGGER.error(
+                "Unknown transform '%s'. Available transforms: [%s]",
+                name,
+                available,
+            )
             raise KeyError(f"Unknown transform '{name}'. Available: [{available}]")
+        LOGGER.debug("Building transform '%s' with schema=%s", name, schema)
         return self._registry[name](schema)
 
 
@@ -171,7 +181,9 @@ def discover_records(image_root: Path) -> tuple[PatchRecord, ...]:
     @return 按路径稳定排序的样本记录元组。
     """
     root = image_root.expanduser().resolve()
+    LOGGER.info("Discovering IDC patch records under: %s", root)
     if not root.exists():
+        LOGGER.error("image_root not found: %s", root)
         raise FileNotFoundError(f"image_root not found: {root}")
 
     records: list[PatchRecord] = []
@@ -194,8 +206,17 @@ def discover_records(image_root: Path) -> tuple[PatchRecord, ...]:
         )
 
     if not records:
+        LOGGER.error("No images discovered under: %s", root)
         raise RuntimeError(f"No images discovered under: {root}")
 
+    label_counts = _count_by_label(records)
+    patient_count = len({record.patient_id for record in records})
+    LOGGER.info(
+        "Discovered %d records from %d patients. Label counts=%s",
+        len(records),
+        patient_count,
+        label_counts,
+    )
     return tuple(records)
 
 
@@ -203,11 +224,19 @@ def split_by_patient(
     records: Sequence[PatchRecord], schema: SplitSchema
 ) -> DatasetSplit:
     """@brief 按患者切分，避免信息泄漏；Patient-wise split to avoid leakage."""
+    LOGGER.info(
+        "Splitting %d records by patient with val_ratio=%.4f, seed=%d",
+        len(records),
+        schema.val_ratio,
+        schema.seed,
+    )
     patients = sorted({record.patient_id for record in records})
     if len(patients) < 2:
+        LOGGER.error("Split failed: less than 2 patients found (%d)", len(patients))
         raise ValueError("At least 2 patients are required for train/val split.")
 
     if not (0.0 < schema.val_ratio < 1.0):
+        LOGGER.error("Invalid split.val_ratio: %.6f", schema.val_ratio)
         raise ValueError("split.val_ratio must be in (0, 1).")
 
     rng = Random(schema.seed)
@@ -227,8 +256,20 @@ def split_by_patient(
     )
 
     if not train_records or not val_records:
+        LOGGER.error(
+            "Invalid split produced empty set. train=%d, val=%d",
+            len(train_records),
+            len(val_records),
+        )
         raise RuntimeError("Invalid split produced an empty train or val set.")
 
+    LOGGER.info(
+        "Patient-wise split done: train=%d, val=%d, train_patients=%d, val_patients=%d",
+        len(train_records),
+        len(val_records),
+        len(patients) - len(val_patients),
+        len(val_patients),
+    )
     return DatasetSplit(train=train_records, val=val_records)
 
 
@@ -246,6 +287,12 @@ def build_data_module(
     transform_registry: TransformRegistry | None = None,
 ) -> DataModule:
     """@brief 构建可直接供训练使用的数据模块；Build a ready-to-use data module."""
+    LOGGER.info(
+        "Building data module (image_root=%s, train_transform=%s, eval_transform=%s)",
+        config.image_root,
+        config.train_transform,
+        config.eval_transform,
+    )
     registry = transform_registry or TransformRegistry()
 
     records = discover_records(config.image_root)
@@ -285,6 +332,15 @@ def build_data_module(
         collate_fn=collate_patch_examples,
     )
 
+    LOGGER.info(
+        "Data module ready: train_size=%d, val_size=%d, batch_size=%d, "
+        "num_workers=%d, weighted_sampler=%s",
+        len(train_dataset),
+        len(val_dataset),
+        config.loader.batch_size,
+        worker_count,
+        config.loader.use_weighted_sampler,
+    )
     return DataModule(
         split=split,
         train_dataset=train_dataset,
@@ -324,13 +380,19 @@ def _build_train_sampler(
 ) -> Sampler[int] | None:
     """@brief 构建训练采样器；Build optional train sampler."""
     if not loader_schema.use_weighted_sampler:
+        LOGGER.debug("Weighted sampler disabled; using default shuffle strategy.")
         return None
 
     class_counts = _count_by_label(records)
     if len(class_counts) < 2:
+        LOGGER.warning(
+            "Weighted sampler requested but only one class present: %s. Fallback to shuffle.",
+            class_counts,
+        )
         return None
 
     weights = [1.0 / class_counts[record.label] for record in records]
+    LOGGER.info("Using weighted sampler with class counts: %s", class_counts)
     return WeightedRandomSampler(
         weights=weights, num_samples=len(weights), replacement=True
     )
