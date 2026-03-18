@@ -75,3 +75,5 @@ histo-patch-cls/
 使用 dataclass 将参数和配置项提出，之后交给 utils/config.py 统一解析。类型注解清晰。
 
 考虑横向拓展处使用状态机或者工厂模式构造模块，避免到处塞 if-else，但对象生命周期必须由模块自身或 engine 管理。
+
+统一使用 utils.logger 中提供的 get_logger 获取 logger 进行注释。
