@@ -50,7 +50,6 @@ histo-patch-cls/
 │   │   └── main.py
 │   └── histoclass/
 │       ├── __init__.py
-│       ├── interface.py
 │       ├── data.py
 │       ├── model.py
 │       ├── engine/
