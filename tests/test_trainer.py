@@ -30,12 +30,6 @@ def test_trainer_fit_smoke(tmp_path) -> None:
         shuffle=False,
         collate_fn=_identity_collate,
     )
-    val_loader = DataLoader(
-        _DummyBatchDataset(),
-        batch_size=1,
-        shuffle=False,
-        collate_fn=_identity_collate,
-    )
 
     model = IDCResNetClassifier(ModelConfig(pretrained=False, hidden_dim=64, dropout=0.1))
     trainer = Trainer(
@@ -47,18 +41,14 @@ def test_trainer_fit_smoke(tmp_path) -> None:
             device="cpu",
             use_amp=False,
             checkpoint_dir=tmp_path,
-            save_best_only=True,
-            monitor_metric="f1",
-            monitor_mode="max",
+            save_checkpoint_each_epoch=True,
             log_every_n_steps=1000,
         ),
     )
 
-    summary = trainer.fit(train_loader=train_loader, val_loader=val_loader)
+    summary = trainer.fit(train_loader=train_loader)
 
     assert len(summary.history) == 1
-    assert summary.best_epoch == 1
-    assert summary.best_checkpoint is not None
-    assert summary.best_checkpoint.exists()
+    assert summary.final_checkpoint is not None
+    assert summary.final_checkpoint.exists()
     assert summary.history[0].train.samples > 0
-    assert summary.history[0].val.samples > 0

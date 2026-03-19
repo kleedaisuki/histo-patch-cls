@@ -33,9 +33,7 @@ class TrainerConfig:
     @param pos_weight 正类权重，None 表示不加权；Positive class weight, None for no weighting.
     @param log_every_n_steps 训练日志间隔步数；Log interval in steps.
     @param checkpoint_dir checkpoint 输出目录；Checkpoint output directory.
-    @param monitor_metric 早停/最优模型监控指标；Metric for best-checkpoint selection.
-    @param monitor_mode 指标方向，max 或 min；Direction for monitor metric, max or min.
-    @param save_best_only 是否只保存最优 checkpoint；Save only best checkpoint if True.
+    @param save_checkpoint_each_epoch 是否每个 epoch 保存 checkpoint；Save checkpoint at each epoch.
     """
 
     epochs: int = 10
@@ -48,18 +46,16 @@ class TrainerConfig:
     pos_weight: float | None = None
     log_every_n_steps: int = 50
     checkpoint_dir: Path = Path("outputs/checkpoints")
-    monitor_metric: str = "f1"
-    monitor_mode: str = "max"
-    save_best_only: bool = True
+    save_checkpoint_each_epoch: bool = True
 
 
 @dataclass(frozen=True, slots=True)
 class PhaseResult:
-    """@brief 单阶段结果；Result summary of one phase (train/val).
+    """@brief 单阶段结果；Result summary of one phase.
 
     @param loss 平均损失；Average loss.
     @param metrics 二分类指标；Binary metrics.
-    @param steps 实际迭代步数；Number of optimization/eval steps.
+    @param steps 实际迭代步数；Number of optimization steps.
     @param samples 实际样本数；Number of processed samples.
     """
 
@@ -75,18 +71,14 @@ class EpochResult:
 
     @param epoch 当前轮次（从 1 开始）；Current epoch index (1-based).
     @param train 训练阶段结果；Train phase result.
-    @param val 验证阶段结果；Validation phase result.
     @param learning_rate 当前学习率；Current learning rate.
     @param checkpoint_path 本轮保存的 checkpoint 路径；Checkpoint path saved for this epoch.
-    @param is_best 本轮是否为最优；Whether this epoch is best so far.
     """
 
     epoch: int
     train: PhaseResult
-    val: PhaseResult
     learning_rate: float
     checkpoint_path: Path | None
-    is_best: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,19 +86,15 @@ class TrainSummary:
     """@brief 训练总结果；Overall training summary.
 
     @param history 每轮结果历史；Per-epoch result history.
-    @param best_epoch 最优轮次（从 1 开始）；Best epoch index (1-based).
-    @param best_metric 最优指标值；Best monitored metric value.
-    @param best_checkpoint 最优 checkpoint 路径；Best checkpoint path.
+    @param final_checkpoint 最后一轮 checkpoint 路径；Last epoch checkpoint path.
     """
 
     history: tuple[EpochResult, ...]
-    best_epoch: int
-    best_metric: float
-    best_checkpoint: Path | None
+    final_checkpoint: Path | None
 
 
 class Trainer:
-    """@brief 训练器；Trainer for binary IDC classification."""
+    """@brief 训练器；Pure trainer for binary IDC classification."""
 
     def __init__(
         self,
@@ -151,53 +139,30 @@ class Trainer:
             config.use_amp,
         )
 
-    def fit(
-        self,
-        train_loader: Iterable[Batch],
-        val_loader: Iterable[Batch],
-    ) -> TrainSummary:
+    def fit(self, train_loader: Iterable[Batch]) -> TrainSummary:
         """@brief 执行完整训练流程；Run full training loop.
 
         @param train_loader 训练集加载器；Training data loader.
-        @param val_loader 验证集加载器；Validation data loader.
         @return 训练结果汇总；Training summary.
         """
         history: list[EpochResult] = []
-        best_metric = (
-            float("-inf") if self.config.monitor_mode == "max" else float("inf")
-        )
-        best_epoch = 0
-        best_checkpoint: Path | None = None
+        final_checkpoint: Path | None = None
 
         for epoch in range(1, self.config.epochs + 1):
             train_result = self.train_one_epoch(train_loader, epoch)
-            val_result = self.evaluate(val_loader)
-
             current_lr = float(self.optimizer.param_groups[0]["lr"])
-            metric_value = _get_monitor_value(val_result, self.config.monitor_metric)
-            is_best = _is_better(metric_value, best_metric, self.config.monitor_mode)
 
             checkpoint_path: Path | None = None
-            if is_best:
-                best_metric = metric_value
-                best_epoch = epoch
-                checkpoint_path = self.save_checkpoint(
-                    epoch, train_result, val_result, is_best=True
-                )
-                best_checkpoint = checkpoint_path
-            elif not self.config.save_best_only:
-                checkpoint_path = self.save_checkpoint(
-                    epoch, train_result, val_result, is_best=False
-                )
+            if self.config.save_checkpoint_each_epoch:
+                checkpoint_path = self.save_checkpoint(epoch, train_result)
+                final_checkpoint = checkpoint_path
 
             history.append(
                 EpochResult(
                     epoch=epoch,
                     train=train_result,
-                    val=val_result,
                     learning_rate=current_lr,
                     checkpoint_path=checkpoint_path,
-                    is_best=is_best,
                 )
             )
 
@@ -205,26 +170,19 @@ class Trainer:
                 self.scheduler.step()
 
             LOGGER.info(
-                "Epoch %d/%d | train_loss=%.6f val_loss=%.6f val_f1=%.4f val_auc=%s best=%s",
+                "Epoch %d/%d | train_loss=%.6f train_f1=%.4f train_auc=%s",
                 epoch,
                 self.config.epochs,
                 train_result.loss,
-                val_result.loss,
-                val_result.metrics.f1,
+                train_result.metrics.f1,
                 (
-                    f"{val_result.metrics.roc_auc:.4f}"
-                    if val_result.metrics.roc_auc is not None
+                    f"{train_result.metrics.roc_auc:.4f}"
+                    if train_result.metrics.roc_auc is not None
                     else "None"
                 ),
-                is_best,
             )
 
-        return TrainSummary(
-            history=tuple(history),
-            best_epoch=best_epoch,
-            best_metric=best_metric,
-            best_checkpoint=best_checkpoint,
-        )
+        return TrainSummary(history=tuple(history), final_checkpoint=final_checkpoint)
 
     def train_one_epoch(self, train_loader: Iterable[Batch], epoch: int) -> PhaseResult:
         """@brief 训练一个 epoch；Train for one epoch.
@@ -300,74 +258,17 @@ class Trainer:
             logits=all_logits,
         )
 
-    @torch.no_grad()
-    def evaluate(self, val_loader: Iterable[Batch]) -> PhaseResult:
-        """@brief 在验证集评估；Evaluate on validation set.
-
-        @param val_loader 验证集加载器；Validation data loader.
-        @return 验证阶段统计结果；Validation-phase result.
-        """
-        self.model.eval()
-
-        total_loss = 0.0
-        step_count = 0
-        sample_count = 0
-        all_logits: list[Tensor] = []
-        all_labels: list[Tensor] = []
-
-        for batch in val_loader:
-            prepared = batch.to(self.device)
-            targets = prepared.labels.float().view(-1, 1)
-
-            autocast_ctx = (
-                torch.amp.autocast(device_type="cuda", enabled=True)
-                if self.amp_enabled
-                else nullcontext()
-            )
-            with autocast_ctx:
-                logits = self.model(prepared.images)
-                loss = self.criterion(logits, targets)
-
-            detached_logits = logits.detach().reshape(-1).cpu()
-            detached_labels = targets.detach().reshape(-1).to(dtype=torch.long).cpu()
-            all_logits.append(detached_logits)
-            all_labels.append(detached_labels)
-
-            batch_size = int(prepared.labels.numel())
-            sample_count += batch_size
-            step_count += 1
-            total_loss += float(loss.detach().item()) * batch_size
-
-        return _finalize_phase_result(
-            total_loss=total_loss,
-            step_count=step_count,
-            sample_count=sample_count,
-            threshold=self.config.threshold,
-            labels=all_labels,
-            logits=all_logits,
-        )
-
-    def save_checkpoint(
-        self,
-        epoch: int,
-        train_result: PhaseResult,
-        val_result: PhaseResult,
-        *,
-        is_best: bool,
-    ) -> Path:
+    def save_checkpoint(self, epoch: int, train_result: PhaseResult) -> Path:
         """@brief 保存 checkpoint；Save checkpoint to disk.
 
         @param epoch 当前轮次；Current epoch.
         @param train_result 训练阶段结果；Train-phase result.
-        @param val_result 验证阶段结果；Validation-phase result.
-        @param is_best 是否最优模型；Whether this checkpoint is best.
         @return checkpoint 文件路径；Saved checkpoint path.
         """
         checkpoint_dir = self.config.checkpoint_dir
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        suffix = "best" if is_best else f"epoch{epoch:03d}"
-        checkpoint_path = checkpoint_dir / f"{suffix}.pt"
+        checkpoint_path = checkpoint_dir / f"epoch{epoch:03d}.pt"
 
         payload = {
             "epoch": epoch,
@@ -378,8 +279,7 @@ class Trainer:
             ),
             "trainer_config": asdict(self.config),
             "train_loss": train_result.loss,
-            "val_loss": val_result.loss,
-            "val_metrics": val_result.metrics.to_dict(),
+            "train_metrics": train_result.metrics.to_dict(),
         }
         torch.save(payload, checkpoint_path)
         LOGGER.info("Checkpoint saved: %s", checkpoint_path)
@@ -452,44 +352,6 @@ def _build_default_criterion(config: TrainerConfig, device: torch.device) -> nn.
     return nn.BCEWithLogitsLoss(pos_weight=weight_tensor)
 
 
-def _get_monitor_value(result: PhaseResult, metric_name: str) -> float:
-    """@brief 读取监控指标；Read monitored metric value.
-
-    @param result 阶段结果；Phase result.
-    @param metric_name 指标名称；Metric name.
-    @return 指标值；Metric value.
-    """
-    if metric_name == "loss":
-        return result.loss
-
-    metric_dict = result.metrics.to_dict()
-    if metric_name not in metric_dict:
-        available = ", ".join(sorted(metric_dict))
-        raise KeyError(
-            f"Unknown monitor metric '{metric_name}'. Available: [{available}]"
-        )
-
-    raw_value = metric_dict[metric_name]
-    if raw_value is None:
-        return float("-inf")
-    return float(raw_value)
-
-
-def _is_better(current: float, best: float, mode: str) -> bool:
-    """@brief 判断指标是否提升；Check whether metric improved.
-
-    @param current 当前值；Current metric value.
-    @param best 历史最优值；Best metric value so far.
-    @param mode 比较方向；Comparison mode.
-    @return 若提升则 True；True if improved.
-    """
-    if mode == "max":
-        return current > best
-    if mode == "min":
-        return current < best
-    raise ValueError(f"monitor_mode must be 'max' or 'min', got '{mode}'.")
-
-
 def _validate_config(config: TrainerConfig) -> None:
     """@brief 校验训练配置；Validate trainer configuration.
 
@@ -512,10 +374,6 @@ def _validate_config(config: TrainerConfig) -> None:
     if config.log_every_n_steps <= 0:
         raise ValueError(
             f"log_every_n_steps must be > 0, got {config.log_every_n_steps}."
-        )
-    if config.monitor_mode not in {"max", "min"}:
-        raise ValueError(
-            f"monitor_mode must be 'max' or 'min', got '{config.monitor_mode}'."
         )
 
 
