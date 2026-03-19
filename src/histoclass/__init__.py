@@ -1,5 +1,15 @@
-﻿"""histo patch classification package."""
+"""histo patch classification package."""
 
+from .config import (
+    AppConfig,
+    SeedConfig,
+    config_to_dict,
+    default_config_path,
+    load_config,
+    parse_config_dict,
+    project_root,
+    save_config,
+)
 from .data import (
     Batch,
     DataModule,
@@ -36,6 +46,7 @@ from .model import (
 )
 
 __all__ = [
+    "AppConfig",
     "Batch",
     "DataModule",
     "DataModuleConfig",
@@ -54,6 +65,7 @@ __all__ = [
     "PhaseResult",
     "PredictionResult",
     "ResNetBackboneRegistry",
+    "SeedConfig",
     "SplitSchema",
     "TrainSummary",
     "Trainer",
@@ -62,6 +74,13 @@ __all__ = [
     "build_data_module",
     "build_model",
     "collate_patch_examples",
+    "config_to_dict",
+    "default_config_path",
     "discover_records",
+    "load_config",
+    "parse_config_dict",
+    "project_root",
+    "save_config",
     "split_by_patient",
 ]
+

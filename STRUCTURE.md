@@ -47,12 +47,15 @@ histo-patch-cls/
 │   └── ...
 ├── src/
 │   ├── histoclass_cli/
+│   │   ├── __init__.py
+│   │   ├── pipeline.py
 │   │   └── main.py
 │   └── histoclass/
 │       ├── __init__.py
 │       ├── data.py
 │       ├── model.py
 │       ├── engine/
+│       │       ├── __init__.py
 │       │       ├── trainer.py
 │       │       └── evaluator.py
 │       └── utils/
@@ -77,3 +80,5 @@ histo-patch-cls/
 考虑横向拓展处使用状态机或者工厂模式构造模块，避免到处塞 if-else，但对象生命周期必须由模块自身或 engine 管理。
 
 统一使用 utils.logger 中提供的 get_logger 获取 logger 进行注释。
+
+histoclass_cli.pipeline 负责将 histoclass 库中的组件编排成应用层流水线的逻辑，main 单独提供命令行参数的解析与环境的初始化。
