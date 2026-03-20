@@ -41,7 +41,7 @@ from .engine import (
 from .model import (
     IDCResNetClassifier,
     ModelConfig,
-    ResNetBackboneRegistry,
+    build_resnet,
     build_model,
 )
 
@@ -64,7 +64,6 @@ __all__ = [
     "PatchRecord",
     "PhaseResult",
     "PredictionResult",
-    "ResNetBackboneRegistry",
     "SeedConfig",
     "SplitSchema",
     "TrainSummary",
@@ -72,6 +71,7 @@ __all__ = [
     "TrainerConfig",
     "TransformRegistry",
     "build_data_module",
+    "build_resnet",
     "build_model",
     "collate_patch_examples",
     "config_to_dict",
@@ -83,4 +83,3 @@ __all__ = [
     "save_config",
     "split_by_patient",
 ]
-

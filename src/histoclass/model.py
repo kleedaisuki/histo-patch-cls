@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
 
 import torch
 from torch import Tensor, nn
@@ -20,7 +19,6 @@ from .utils import get_logger
 
 
 LOGGER = get_logger(__name__)
-BackboneFactory = Callable[[bool], nn.Module]
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,41 +39,6 @@ class ModelConfig:
     freeze_backbone: bool = False
 
 
-class ResNetBackboneRegistry:
-    """@brief ResNet 主干注册表；Registry for ResNet backbones."""
-
-    def __init__(self) -> None:
-        self._registry: dict[str, BackboneFactory] = {
-            "resnet18": _build_resnet18,
-            "resnet34": _build_resnet34,
-            "resnet50": _build_resnet50,
-        }
-
-    def register(self, name: str, factory: BackboneFactory) -> None:
-        """@brief 注册新 backbone；Register a new backbone factory.
-
-        @param name backbone 名称；Backbone name key.
-        @param factory backbone 构造函数；Backbone factory callable.
-        """
-        LOGGER.debug("Registering backbone factory: %s", name)
-        self._registry[name] = factory
-
-    def build(self, name: str, pretrained: bool) -> nn.Module:
-        """@brief 构建指定 backbone；Build a named backbone instance.
-
-        @param name backbone 名称；Backbone name.
-        @param pretrained 是否加载预训练权重；Whether to load pretrained weights.
-        @return 实例化后的 backbone；Instantiated backbone module.
-        """
-        if name not in self._registry:
-            available = ", ".join(sorted(self._registry))
-            LOGGER.error("Unknown backbone '%s'. Available: [%s]", name, available)
-            raise KeyError(f"Unknown backbone '{name}'. Available: [{available}]")
-
-        LOGGER.info("Building backbone '%s' (pretrained=%s)", name, pretrained)
-        return self._registry[name](pretrained)
-
-
 class IDCResNetClassifier(nn.Module):
     """@brief IDC 二分类模型；IDC binary classifier with ResNet backbone.
 
@@ -85,19 +48,16 @@ class IDCResNetClassifier(nn.Module):
     def __init__(
         self,
         config: ModelConfig = ModelConfig(),
-        backbone_registry: ResNetBackboneRegistry | None = None,
     ) -> None:
         """@brief 初始化 IDC 分类器；Initialize IDC classifier.
 
         @param config 模型配置；Model configuration.
-        @param backbone_registry 可选 backbone 注册表；Optional backbone registry.
         """
         super().__init__()
         _validate_model_config(config)
         self.config = config
 
-        registry = backbone_registry or ResNetBackboneRegistry()
-        backbone = registry.build(config.backbone_name, config.pretrained)
+        backbone = build_resnet(config.backbone_name, config.pretrained)
         feature_dim = _replace_backbone_fc_with_identity(backbone)
 
         self.backbone = backbone
@@ -147,15 +107,36 @@ class IDCResNetClassifier(nn.Module):
 
 def build_model(
     config: ModelConfig,
-    backbone_registry: ResNetBackboneRegistry | None = None,
 ) -> IDCResNetClassifier:
     """@brief 按配置构建模型；Build model from config.
 
     @param config 模型配置；Model configuration.
-    @param backbone_registry 可选 backbone 注册表；Optional backbone registry.
     @return 构建完成的模型；Constructed model instance.
     """
-    return IDCResNetClassifier(config=config, backbone_registry=backbone_registry)
+    return IDCResNetClassifier(config=config)
+
+
+def build_resnet(backbone_name: str, pretrained: bool) -> nn.Module:
+    """@brief 按名称构建 ResNet 主干；Build ResNet backbone by name.
+
+    @param backbone_name ResNet 名称（如 resnet18）；ResNet name (e.g., resnet18).
+    @param pretrained 是否加载预训练权重；Whether to load pretrained weights.
+    @return ResNet 主干模型；Instantiated ResNet backbone.
+    """
+    normalized_name = backbone_name.lower().strip()
+    if normalized_name == "resnet18":
+        LOGGER.info("Building backbone '%s' (pretrained=%s)", normalized_name, pretrained)
+        return _build_resnet18(pretrained)
+    if normalized_name == "resnet34":
+        LOGGER.info("Building backbone '%s' (pretrained=%s)", normalized_name, pretrained)
+        return _build_resnet34(pretrained)
+    if normalized_name == "resnet50":
+        LOGGER.info("Building backbone '%s' (pretrained=%s)", normalized_name, pretrained)
+        return _build_resnet50(pretrained)
+
+    available = "resnet18, resnet34, resnet50"
+    LOGGER.error("Unknown backbone '%s'. Available: [%s]", backbone_name, available)
+    raise KeyError(f"Unknown backbone '{backbone_name}'. Available: [{available}]")
 
 
 def _build_resnet18(pretrained: bool) -> nn.Module:
@@ -220,6 +201,6 @@ def _validate_model_config(config: ModelConfig) -> None:
 __all__ = [
     "IDCResNetClassifier",
     "ModelConfig",
-    "ResNetBackboneRegistry",
+    "build_resnet",
     "build_model",
 ]
