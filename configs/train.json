@@ -1,68 +1,79 @@
 {
-  "data": {
-    "image_root": "data/raw",
-    "image": {
-      "image_size": [
-        50,
-        50
-      ],
-      "mean": [
-        0.5,
-        0.5,
-        0.5
-      ],
-      "std": [
-        0.25,
-        0.25,
-        0.25
-      ]
+    "data": {
+        "image_root": "data/raw",
+        "image": {
+            "image_size": [
+                50,
+                50
+            ],
+            "mean": [
+                0.5,
+                0.5,
+                0.5
+            ],
+            "std": [
+                0.25,
+                0.25,
+                0.25
+            ]
+        },
+        "split": {
+            "val_ratio": 0.2,
+            "seed": 42
+        },
+        "loader": {
+            "batch_size": 256,
+            "num_workers": 8,
+            "pin_memory": true,
+            "train_drop_last": true,
+            "eval_drop_last": false,
+            "use_weighted_sampler": false
+        },
+        "lmdb": {
+            "enabled": true,
+            "path": null,
+            "map_size_bytes": 4294967296
+        }
     },
-    "split": {
-      "val_ratio": 0.2,
-      "seed": 42
+    "model": {
+        "backbone_name": "resnet18",
+        "hidden_dim": 128,
+        "dropout": 0.3,
+        "pretrained": true,
+        "freeze_backbone": false
     },
-    "loader": {
-      "batch_size": 256,
-      "num_workers": 8,
-      "pin_memory": true,
-      "train_drop_last": true,
-      "eval_drop_last": false,
-      "use_weighted_sampler": false
+    "trainer": {
+        "epochs": 20,
+        "learning_rate": 0.0003,
+        "weight_decay": 0.0005,
+        "threshold": 0.5,
+        "device": "cuda",
+        "use_amp": true,
+        "grad_clip_norm": 1.0,
+        "pos_weight": 2.5,
+        "log_every_n_steps": 100,
+        "checkpoint_dir": "outputs/checkpoints",
+        "save_checkpoint_each_epoch": false
     },
-    "lmdb": {
-      "enabled": true,
-      "path": null,
-      "map_size_bytes": 8589934592
+    "evaluator": {
+        "threshold": 0.5,
+        "device": "cuda",
+        "use_amp": true
+    },
+    "seed": {
+        "seed": 42,
+        "deterministic": true,
+        "benchmark": false
+    },
+    "logging": {
+        "level": "INFO",
+        "streams": {
+            "DEBUG": "stdout",
+            "INFO": "stdout",
+            "WARNING": "stderr",
+            "ERROR": "stderr",
+            "CRITICAL": "stderr"
+        },
+        "file_path": null
     }
-  },
-  "model": {
-    "backbone_name": "resnet18",
-    "hidden_dim": 128,
-    "dropout": 0.3,
-    "pretrained": true,
-    "freeze_backbone": false
-  },
-  "trainer": {
-    "epochs": 20,
-    "learning_rate": 0.0003,
-    "weight_decay": 0.0005,
-    "threshold": 0.5,
-    "device": "cuda",
-    "use_amp": true,
-    "grad_clip_norm": 1.0,
-    "pos_weight": 2.5,
-    "log_every_n_steps": 100,
-    "checkpoint_dir": "outputs/checkpoints",
-    "save_checkpoint_each_epoch": false
-  },
-  "evaluator": {
-    "threshold": 0.5,
-    "device": "cuda",
-    "use_amp": true
-  },
-  "seed": {
-    "seed": 42,
-    "deterministic": true,
-    "benchmark": false
-  }
 }

@@ -10,7 +10,7 @@ from typing import Any, Mapping
 from .data import DataModuleConfig, ImageSchema, LmdbSchema, LoaderSchema, SplitSchema
 from .engine import EvaluatorConfig, TrainerConfig
 from .model import ModelConfig
-from .utils import get_logger
+from .utils import configure_logging, get_logger
 
 
 LOGGER = get_logger(__name__)
@@ -31,6 +31,34 @@ class SeedConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class LoggingConfig:
+    """@brief 日志系统配置；Logging system configuration.
+
+    @param level logger 最低级别；Global logger threshold.
+    @param streams 各日志级别到输出流的映射；Per-level output stream mapping.
+    @param file_path 文件流路径（仅 file 目标时需要）；File target path when needed.
+    """
+
+    level: str = "INFO"
+    streams: dict[str, str] = None  # type: ignore[assignment]
+    file_path: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.streams is None:
+            object.__setattr__(
+                self,
+                "streams",
+                {
+                    "DEBUG": "stdout",
+                    "INFO": "stdout",
+                    "WARNING": "stderr",
+                    "ERROR": "stderr",
+                    "CRITICAL": "stderr",
+                },
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     """@brief 顶层应用配置；Top-level application config.
 
@@ -46,6 +74,7 @@ class AppConfig:
     trainer: TrainerConfig = TrainerConfig()
     evaluator: EvaluatorConfig = EvaluatorConfig()
     seed: SeedConfig = SeedConfig()
+    logging: LoggingConfig = LoggingConfig()
 
 
 def project_root() -> Path:
@@ -97,7 +126,7 @@ def parse_config_dict(
     root = _expect_mapping(payload, "config")
     _ensure_allowed_keys(
         root,
-        allowed={"data", "model", "trainer", "evaluator", "seed"},
+        allowed={"data", "model", "trainer", "evaluator", "seed", "logging"},
         scope="config",
     )
 
@@ -110,14 +139,22 @@ def parse_config_dict(
     trainer_section = _expect_mapping(root.get("trainer", {}), "config.trainer")
     evaluator_section = _expect_mapping(root.get("evaluator", {}), "config.evaluator")
     seed_section = _expect_mapping(root.get("seed", {}), "config.seed")
+    logging_section = _expect_mapping(root.get("logging", {}), "config.logging")
 
-    return AppConfig(
+    app_config = AppConfig(
         data=data_config,
         model=_parse_model_config(model_section),
         trainer=_parse_trainer_config(trainer_section, config_dir=config_dir),
         evaluator=_parse_evaluator_config(evaluator_section),
         seed=_parse_seed_config(seed_section),
+        logging=_parse_logging_config(logging_section, config_dir=config_dir),
     )
+    configure_logging(
+        level=app_config.logging.level,
+        level_targets=app_config.logging.streams,
+        file_path=app_config.logging.file_path,
+    )
+    return app_config
 
 
 def config_to_dict(config: AppConfig) -> dict[str, Any]:
@@ -320,6 +357,34 @@ def _parse_seed_config(section: Mapping[str, Any]) -> SeedConfig:
     )
 
 
+def _parse_logging_config(section: Mapping[str, Any], *, config_dir: Path) -> LoggingConfig:
+    _ensure_allowed_keys(
+        section,
+        allowed={"level", "streams", "file_path"},
+        scope="config.logging",
+    )
+
+    streams_value = section.get("streams")
+    if streams_value is None:
+        streams: dict[str, str] | None = None
+    else:
+        streams_mapping = _expect_mapping(streams_value, "config.logging.streams")
+        streams = {str(key): str(value) for key, value in streams_mapping.items()}
+
+    file_path_raw = section.get("file_path")
+    file_path = (
+        None
+        if file_path_raw is None
+        else _resolve_path(Path(str(file_path_raw)), base_dir=config_dir)
+    )
+
+    return LoggingConfig(
+        level=str(section.get("level", "INFO")),
+        streams=streams,
+        file_path=file_path,
+    )
+
+
 def _expect_mapping(value: Any, scope: str) -> Mapping[str, Any]:
     if value is None:
         return {}
@@ -424,6 +489,7 @@ def _to_json_compatible(value: Any) -> Any:
 
 __all__ = [
     "AppConfig",
+    "LoggingConfig",
     "SeedConfig",
     "config_to_dict",
     "default_config_path",

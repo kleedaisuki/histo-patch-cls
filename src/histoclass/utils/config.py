@@ -1,7 +1,8 @@
-﻿"""Compatibility exports for unified config module."""
+"""Compatibility exports for unified config module."""
 
 from ..config import (
     AppConfig,
+    LoggingConfig,
     SeedConfig,
     config_to_dict,
     default_config_path,
@@ -13,6 +14,7 @@ from ..config import (
 
 __all__ = [
     "AppConfig",
+    "LoggingConfig",
     "SeedConfig",
     "config_to_dict",
     "default_config_path",

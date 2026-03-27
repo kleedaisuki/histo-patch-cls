@@ -2,6 +2,7 @@
 
 from .config import (
     AppConfig,
+    LoggingConfig,
     SeedConfig,
     config_to_dict,
     default_config_path,
@@ -59,6 +60,7 @@ __all__ = [
     "IDCResNetClassifier",
     "ImageSchema",
     "LmdbSchema",
+    "LoggingConfig",
     "LoaderSchema",
     "ModelConfig",
     "PatchExample",

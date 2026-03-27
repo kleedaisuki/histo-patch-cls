@@ -14,6 +14,10 @@ def test_load_default_config_smoke() -> None:
     assert config.evaluator.threshold == 0.5
     assert config.seed.seed == 42
     assert config.data.lmdb.enabled is True
+    assert config.logging.level == "INFO"
+    assert config.logging.streams["INFO"] == "stdout"
+    assert config.logging.streams["ERROR"] == "stderr"
+    assert config.logging.file_path is None
 
 
 def test_load_config_with_partial_override(tmp_path) -> None:
@@ -25,6 +29,16 @@ def test_load_config_with_partial_override(tmp_path) -> None:
         },
         "trainer": {"epochs": 2, "checkpoint_dir": "custom/ckpt"},
         "seed": {"seed": 123},
+        "logging": {
+            "level": "DEBUG",
+            "streams": {
+                "DEBUG": "file",
+                "INFO": "stdout",
+                "WARNING": "stderr",
+                "ERROR": "file",
+            },
+            "file_path": "outputs/logs/test.log",
+        },
     }
     config_path = tmp_path / "custom.json"
     config_path.write_text(json.dumps(custom), encoding="utf-8")
@@ -42,3 +56,7 @@ def test_load_config_with_partial_override(tmp_path) -> None:
     assert config.trainer.learning_rate == 1e-3
     assert config.seed.seed == 123
     assert config.seed.benchmark is False
+    assert config.logging.level == "DEBUG"
+    assert config.logging.streams["DEBUG"] == "file"
+    assert config.logging.streams["ERROR"] == "file"
+    assert config.logging.file_path == (project_root / "outputs/logs/test.log").resolve()
