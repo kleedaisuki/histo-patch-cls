@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from random import Random
+import concurrent.futures
+import multiprocessing
 from typing import Iterable, Sequence
 
 import lmdb
@@ -335,7 +337,9 @@ def build_data_module(config: DataModuleConfig) -> DataModule:
     eval_tf = _build_eval_basic(config.image)
     lmdb_path = _prepare_lmdb_cache(records=records, config=config)
 
-    train_dataset = IDCPatchDataset(split.train, transform=train_tf, lmdb_path=lmdb_path)
+    train_dataset = IDCPatchDataset(
+        split.train, transform=train_tf, lmdb_path=lmdb_path
+    )
     val_dataset = IDCPatchDataset(split.val, transform=eval_tf, lmdb_path=lmdb_path)
 
     sampler = _build_train_sampler(split.train, config.loader)
@@ -441,8 +445,10 @@ def _count_by_label(records: Iterable[PatchRecord]) -> dict[int, int]:
     return counts
 
 
-def _prepare_lmdb_cache(records: Sequence[PatchRecord], config: DataModuleConfig) -> Path | None:
-    """@brief 构建并预热 LMDB 缓存；Build and warm LMDB cache."""
+def _prepare_lmdb_cache(
+    records: Sequence[PatchRecord], config: DataModuleConfig
+) -> Path | None:
+    """@brief 构建并预热 LMDB 缓存（多线程加速版）；Build and warm LMDB cache with ThreadPool."""
     if not config.lmdb.enabled:
         LOGGER.info("LMDB cache disabled by config.")
         return None
@@ -466,17 +472,45 @@ def _prepare_lmdb_cache(records: Sequence[PatchRecord], config: DataModuleConfig
         max_readers=2048,
     )
 
+    def _read_worker(record: PatchRecord) -> tuple[bytes, bytes]:
+        key = _record_key(record.path)
+        data = record.path.read_bytes()
+        return key, data
+
     inserted = 0
+    max_workers = min(32, multiprocessing.cpu_count() * 4)
+    BATCH_SIZE = 5000
+
+    LOGGER.info(
+        "Starting LMDB ingestion with max_workers=%d, batch_size=%d",
+        max_workers,
+        BATCH_SIZE,
+    )
+
     try:
-        with env.begin(write=True) as txn:
-            for record in records:
-                is_new = txn.put(
-                    _record_key(record.path),
-                    record.path.read_bytes(),
-                    overwrite=False,
-                )
+        txn = env.begin(write=True)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_read_worker, record) for record in records]
+
+            for i, future in enumerate(concurrent.futures.as_completed(futures)):
+                key, data = future.result()
+
+                is_new = txn.put(key, data, overwrite=False)
                 if is_new:
                     inserted += 1
+
+                if (i + 1) % BATCH_SIZE == 0:
+                    txn.commit()
+                    txn = env.begin(write=True)
+                    LOGGER.debug("Committed batch %d / %d", i + 1, len(records))
+
+        txn.commit()
+
+    except Exception as e:
+        LOGGER.error("Error occurred during LMDB ingestion, aborting transaction!")
+        txn.abort()
+        raise e
     finally:
         env.sync()
         env.close()

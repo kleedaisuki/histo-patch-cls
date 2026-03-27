@@ -32,7 +32,7 @@
         "lmdb": {
             "enabled": true,
             "path": null,
-            "map_size_bytes": 4294967296
+            "map_size_bytes": 34359738368
         }
     },
     "model": {
