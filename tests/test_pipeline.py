@@ -28,7 +28,7 @@ class _MetricsStub:
 
 def _build_test_config() -> AppConfig:
     return AppConfig(
-        data=DataModuleConfig(image_root=Path("data/raw/breast-histopathology-images")),
+        data=DataModuleConfig(image_root=Path("data/raw")),
         model=ModelConfig(pretrained=False),
         trainer=TrainerConfig(device="cpu", use_amp=False),
         evaluator=EvaluatorConfig(device="cpu", use_amp=False),

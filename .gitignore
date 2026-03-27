@@ -213,3 +213,6 @@ __marimo__/
 
 # data folder
 /data
+
+# models
+/outputs

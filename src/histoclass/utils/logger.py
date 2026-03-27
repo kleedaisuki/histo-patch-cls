@@ -12,7 +12,7 @@ ALLOWED_LEVELS: Final[frozenset[int]] = frozenset(
     {logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR}
 )
 LOG_FORMAT: Final[str] = (
-    "%(asctime)s | %(levelname)-7s | %(name)s | %(filename)s:%(lineno)d | %(message)s"
+    "%(asctime)s | %(levelname)s | %(name)s | %(filename)s:%(lineno)d | %(message)s"
 )
 DATE_FORMAT: Final[str] = "%Y-%m-%d %H:%M:%S.%f"
 

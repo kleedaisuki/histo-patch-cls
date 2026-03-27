@@ -1,6 +1,6 @@
 {
   "data": {
-    "image_root": "data/raw/breast-histopathology-images",
+    "image_root": "data/raw",
     "train_transform": "train_basic",
     "eval_transform": "eval_basic",
     "image": {

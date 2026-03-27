@@ -8,7 +8,7 @@ def test_load_default_config_smoke() -> None:
     config = load_config()
 
     assert isinstance(config, AppConfig)
-    assert config.data.image_root == Path("data/raw/breast-histopathology-images").resolve()
+    assert config.data.image_root == Path("data/raw").resolve()
     assert config.model.backbone_name == "resnet18"
     assert config.trainer.epochs == 10
     assert config.evaluator.threshold == 0.5
