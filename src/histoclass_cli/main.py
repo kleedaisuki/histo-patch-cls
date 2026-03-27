@@ -46,14 +46,24 @@ def resolve_config_path(config_name: str) -> Path:
     @param config_name 配置名或 JSON 路径；Config name or JSON path.
     @return 解析后的 JSON 配置绝对路径；Resolved absolute JSON config path.
     """
-    candidate = Path(config_name)
+    candidate = Path(config_name).expanduser()
+    is_named_only = not candidate.is_absolute() and len(candidate.parts) == 1
+
     if candidate.suffix.lower() == ".json":
-        return candidate.expanduser().resolve()
+        if not is_named_only:
+            return candidate.resolve()
+        direct = candidate.resolve()
+        if direct.exists():
+            return direct
+        return (project_root() / "configs" / candidate.name).resolve()
 
-    if candidate.is_absolute() or len(candidate.parts) > 1:
-        return candidate.with_suffix(".json").expanduser().resolve()
+    if not is_named_only:
+        return candidate.with_suffix(".json").resolve()
 
-    return (project_root() / "configs" / f"{config_name}.json").resolve()
+    direct = candidate.with_suffix(".json").resolve()
+    if direct.exists():
+        return direct
+    return (project_root() / "configs" / f"{candidate.name}.json").resolve()
 
 
 def main(argv: list[str] | None = None) -> int:
