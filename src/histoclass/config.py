@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from .data import DataModuleConfig, ImageSchema, LoaderSchema, SplitSchema
+from .data import DataModuleConfig, ImageSchema, LmdbSchema, LoaderSchema, SplitSchema
 from .engine import EvaluatorConfig, TrainerConfig
 from .model import ModelConfig
 from .utils import get_logger
@@ -152,11 +152,10 @@ def _parse_data_config(section: Mapping[str, Any], *, config_dir: Path) -> DataM
         section,
         allowed={
             "image_root",
-            "train_transform",
-            "eval_transform",
             "image",
             "split",
             "loader",
+            "lmdb",
         },
         scope="config.data",
     )
@@ -168,14 +167,14 @@ def _parse_data_config(section: Mapping[str, Any], *, config_dir: Path) -> DataM
     image_section = _expect_mapping(section.get("image", {}), "config.data.image")
     split_section = _expect_mapping(section.get("split", {}), "config.data.split")
     loader_section = _expect_mapping(section.get("loader", {}), "config.data.loader")
+    lmdb_section = _expect_mapping(section.get("lmdb", {}), "config.data.lmdb")
 
     return DataModuleConfig(
         image_root=image_root,
-        train_transform=str(section.get("train_transform", "train_basic")),
-        eval_transform=str(section.get("eval_transform", "eval_basic")),
         image=_parse_image_schema(image_section),
         split=_parse_split_schema(split_section),
         loader=_parse_loader_schema(loader_section),
+        lmdb=_parse_lmdb_schema(lmdb_section, config_dir=config_dir),
     )
 
 
@@ -220,6 +219,21 @@ def _parse_loader_schema(section: Mapping[str, Any]) -> LoaderSchema:
         train_drop_last=bool(section.get("train_drop_last", True)),
         eval_drop_last=bool(section.get("eval_drop_last", False)),
         use_weighted_sampler=bool(section.get("use_weighted_sampler", False)),
+    )
+
+
+def _parse_lmdb_schema(section: Mapping[str, Any], *, config_dir: Path) -> LmdbSchema:
+    _ensure_allowed_keys(
+        section,
+        allowed={"enabled", "path", "map_size_bytes"},
+        scope="config.data.lmdb",
+    )
+    path_raw = section.get("path")
+    path = None if path_raw is None else _resolve_path(Path(str(path_raw)), base_dir=config_dir)
+    return LmdbSchema(
+        enabled=bool(section.get("enabled", True)),
+        path=path,
+        map_size_bytes=int(section.get("map_size_bytes", 8 * 1024 * 1024 * 1024)),
     )
 
 

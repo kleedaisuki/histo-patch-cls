@@ -20,6 +20,7 @@ dependencies = [
 
     # data
     "kagglehub>=0.2.0",
+    "lmdb>=2.1.1",
 
     # utils
     "tqdm>=4.66",

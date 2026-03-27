@@ -1,12 +1,14 @@
-﻿"""Data pipeline for IDC patch classification."""
+"""Data pipeline for IDC patch classification."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from random import Random
-from typing import Callable, Iterable, Sequence
+from typing import Iterable, Sequence
 
+import lmdb
 import torch
 from PIL import Image
 from torch import Tensor
@@ -17,7 +19,6 @@ from .utils import get_logger
 
 
 IMAGE_SUFFIXES: tuple[str, ...] = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
-TransformFactory = Callable[["ImageSchema"], T.Compose]
 LOGGER = get_logger(__name__)
 
 
@@ -51,15 +52,23 @@ class LoaderSchema:
 
 
 @dataclass(frozen=True, slots=True)
+class LmdbSchema:
+    """@brief LMDB 缓存配置；LMDB cache schema."""
+
+    enabled: bool = True
+    path: Path | None = None
+    map_size_bytes: int = 8 * 1024 * 1024 * 1024
+
+
+@dataclass(frozen=True, slots=True)
 class DataModuleConfig:
     """@brief 数据模块顶层配置；Top-level data module config."""
 
     image_root: Path
-    train_transform: str = "train_basic"
-    eval_transform: str = "eval_basic"
     image: ImageSchema = ImageSchema()
     split: SplitSchema = SplitSchema()
     loader: LoaderSchema = LoaderSchema()
+    lmdb: LmdbSchema = LmdbSchema()
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,19 +134,31 @@ class IDCPatchDataset(Dataset[PatchExample]):
     def __init__(
         self,
         records: Sequence[PatchRecord],
-        transform: Callable[[Image.Image], Tensor],
+        transform: T.Compose,
+        lmdb_path: Path | None = None,
     ) -> None:
         self._records: tuple[PatchRecord, ...] = tuple(records)
         self._transform = transform
+        self._lmdb_path = lmdb_path
+        self._lmdb_env: lmdb.Environment | None = None
+        self._warned_missing_lmdb_key = False
 
     def __len__(self) -> int:
         return len(self._records)
 
     def __getitem__(self, index: int) -> PatchExample:
         record = self._records[index]
-        with Image.open(record.path) as image:
-            rgb_image = image.convert("RGB")
-            tensor = self._transform(rgb_image)
+        payload = self._read_image_bytes(record.path)
+
+        if payload is None:
+            with Image.open(record.path) as image:
+                rgb_image = image.convert("RGB")
+                tensor = self._transform(rgb_image)
+        else:
+            with Image.open(BytesIO(payload)) as image:
+                rgb_image = image.convert("RGB")
+                tensor = self._transform(rgb_image)
+
         return PatchExample(
             image=tensor,
             label=record.label,
@@ -145,33 +166,50 @@ class IDCPatchDataset(Dataset[PatchExample]):
             path=record.path,
         )
 
+    def __del__(self) -> None:
+        if self._lmdb_env is not None:
+            self._lmdb_env.close()
+            self._lmdb_env = None
 
-class TransformRegistry:
-    """@brief 变换工厂注册表；Transform factory registry."""
+    def __getstate__(self) -> dict[str, object]:
+        state = dict(self.__dict__)
+        state["_lmdb_env"] = None
+        return state
 
-    def __init__(self) -> None:
-        self._registry: dict[str, TransformFactory] = {
-            "train_basic": _build_train_basic,
-            "eval_basic": _build_eval_basic,
-        }
+    def _read_image_bytes(self, path: Path) -> bytes | None:
+        env = self._ensure_lmdb_env()
+        if env is None:
+            return None
 
-    def register(self, name: str, factory: TransformFactory) -> None:
-        """@brief 注册新变换；Register a new transform factory."""
-        LOGGER.debug("Registering transform factory: %s", name)
-        self._registry[name] = factory
+        with env.begin(write=False) as txn:
+            payload = txn.get(_record_key(path))
 
-    def build(self, name: str, schema: ImageSchema) -> T.Compose:
-        """@brief 根据名字构建变换；Build transform by name."""
-        if name not in self._registry:
-            available = ", ".join(sorted(self._registry))
-            LOGGER.error(
-                "Unknown transform '%s'. Available transforms: [%s]",
-                name,
-                available,
-            )
-            raise KeyError(f"Unknown transform '{name}'. Available: [{available}]")
-        LOGGER.debug("Building transform '%s' with schema=%s", name, schema)
-        return self._registry[name](schema)
+        if payload is None:
+            if not self._warned_missing_lmdb_key:
+                LOGGER.warning(
+                    "LMDB key miss detected. Falling back to filesystem reads. Example key path=%s",
+                    path,
+                )
+                self._warned_missing_lmdb_key = True
+            return None
+        return bytes(payload)
+
+    def _ensure_lmdb_env(self) -> lmdb.Environment | None:
+        if self._lmdb_path is None:
+            return None
+        if self._lmdb_env is not None:
+            return self._lmdb_env
+
+        self._lmdb_env = lmdb.open(
+            str(self._lmdb_path),
+            readonly=True,
+            lock=False,
+            readahead=False,
+            meminit=False,
+            subdir=False,
+            max_readers=2048,
+        )
+        return self._lmdb_env
 
 
 def discover_records(image_root: Path) -> tuple[PatchRecord, ...]:
@@ -282,27 +320,23 @@ def collate_patch_examples(examples: Sequence[PatchExample]) -> Batch:
     return Batch(images=images, labels=labels, patient_ids=patient_ids, paths=paths)
 
 
-def build_data_module(
-    config: DataModuleConfig,
-    transform_registry: TransformRegistry | None = None,
-) -> DataModule:
+def build_data_module(config: DataModuleConfig) -> DataModule:
     """@brief 构建可直接供训练使用的数据模块；Build a ready-to-use data module."""
     LOGGER.info(
-        "Building data module (image_root=%s, train_transform=%s, eval_transform=%s)",
+        "Building data module (image_root=%s, lmdb_enabled=%s)",
         config.image_root,
-        config.train_transform,
-        config.eval_transform,
+        config.lmdb.enabled,
     )
-    registry = transform_registry or TransformRegistry()
 
     records = discover_records(config.image_root)
     split = split_by_patient(records, config.split)
 
-    train_tf = registry.build(config.train_transform, config.image)
-    eval_tf = registry.build(config.eval_transform, config.image)
+    train_tf = _build_train_basic(config.image)
+    eval_tf = _build_eval_basic(config.image)
+    lmdb_path = _prepare_lmdb_cache(records=records, config=config)
 
-    train_dataset = IDCPatchDataset(split.train, transform=train_tf)
-    val_dataset = IDCPatchDataset(split.val, transform=eval_tf)
+    train_dataset = IDCPatchDataset(split.train, transform=train_tf, lmdb_path=lmdb_path)
+    val_dataset = IDCPatchDataset(split.val, transform=eval_tf, lmdb_path=lmdb_path)
 
     sampler = _build_train_sampler(split.train, config.loader)
 
@@ -333,13 +367,14 @@ def build_data_module(
     )
 
     LOGGER.info(
-        "Data module ready: train_size=%d, val_size=%d, batch_size=%d, "
-        "num_workers=%d, weighted_sampler=%s",
+        "Data module ready: train_size=%d, val_size=%d, batch_size=%d, num_workers=%d, "
+        "weighted_sampler=%s, lmdb_path=%s",
         len(train_dataset),
         len(val_dataset),
         config.loader.batch_size,
         worker_count,
         config.loader.use_weighted_sampler,
+        lmdb_path,
     )
     return DataModule(
         split=split,
@@ -406,6 +441,60 @@ def _count_by_label(records: Iterable[PatchRecord]) -> dict[int, int]:
     return counts
 
 
+def _prepare_lmdb_cache(records: Sequence[PatchRecord], config: DataModuleConfig) -> Path | None:
+    """@brief 构建并预热 LMDB 缓存；Build and warm LMDB cache."""
+    if not config.lmdb.enabled:
+        LOGGER.info("LMDB cache disabled by config.")
+        return None
+
+    lmdb_path = (
+        config.lmdb.path
+        if config.lmdb.path is not None
+        else config.image_root.parent / "processed" / "idc_patches.lmdb"
+    )
+    resolved_path = lmdb_path.expanduser().resolve()
+    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+
+    LOGGER.info("Preparing LMDB cache at: %s", resolved_path)
+    env = lmdb.open(
+        str(resolved_path),
+        map_size=config.lmdb.map_size_bytes,
+        subdir=False,
+        lock=True,
+        readahead=False,
+        meminit=False,
+        max_readers=2048,
+    )
+
+    inserted = 0
+    try:
+        with env.begin(write=True) as txn:
+            for record in records:
+                is_new = txn.put(
+                    _record_key(record.path),
+                    record.path.read_bytes(),
+                    overwrite=False,
+                )
+                if is_new:
+                    inserted += 1
+    finally:
+        env.sync()
+        env.close()
+
+    LOGGER.info(
+        "LMDB cache ready: total_records=%d, inserted_new=%d, path=%s",
+        len(records),
+        inserted,
+        resolved_path,
+    )
+    return resolved_path
+
+
+def _record_key(path: Path) -> bytes:
+    """@brief 样本路径转 LMDB 键；Convert sample path to LMDB key."""
+    return str(path).encode("utf-8")
+
+
 __all__ = [
     "Batch",
     "DataModule",
@@ -413,11 +502,11 @@ __all__ = [
     "DatasetSplit",
     "IDCPatchDataset",
     "ImageSchema",
+    "LmdbSchema",
     "LoaderSchema",
     "PatchExample",
     "PatchRecord",
     "SplitSchema",
-    "TransformRegistry",
     "build_data_module",
     "collate_patch_examples",
     "discover_records",

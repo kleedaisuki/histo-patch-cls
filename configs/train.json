@@ -22,8 +22,8 @@
       "seed": 42
     },
     "loader": {
-      "batch_size": 64,
-      "num_workers": 4,
+      "batch_size": 256,
+      "num_workers": 8,
       "pin_memory": true,
       "train_drop_last": true,
       "eval_drop_last": false,
@@ -37,32 +37,32 @@
   },
   "model": {
     "backbone_name": "resnet18",
-    "hidden_dim": 256,
-    "dropout": 0.2,
+    "hidden_dim": 128,
+    "dropout": 0.3,
     "pretrained": true,
     "freeze_backbone": false
   },
   "trainer": {
-    "epochs": 10,
-    "learning_rate": 0.001,
-    "weight_decay": 0.0001,
+    "epochs": 20,
+    "learning_rate": 0.0003,
+    "weight_decay": 0.0005,
     "threshold": 0.5,
-    "device": null,
-    "use_amp": false,
-    "grad_clip_norm": null,
-    "pos_weight": null,
-    "log_every_n_steps": 50,
+    "device": "cuda",
+    "use_amp": true,
+    "grad_clip_norm": 1.0,
+    "pos_weight": 2.5,
+    "log_every_n_steps": 100,
     "checkpoint_dir": "outputs/checkpoints",
-    "save_checkpoint_each_epoch": true
+    "save_checkpoint_each_epoch": false
   },
   "evaluator": {
     "threshold": 0.5,
-    "device": null,
-    "use_amp": false
+    "device": "cuda",
+    "use_amp": true
   },
   "seed": {
     "seed": 42,
-    "deterministic": false,
+    "deterministic": true,
     "benchmark": false
   }
 }

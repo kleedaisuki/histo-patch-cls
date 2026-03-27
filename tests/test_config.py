@@ -13,6 +13,7 @@ def test_load_default_config_smoke() -> None:
     assert config.trainer.epochs == 10
     assert config.evaluator.threshold == 0.5
     assert config.seed.seed == 42
+    assert config.data.lmdb.enabled is True
 
 
 def test_load_config_with_partial_override(tmp_path) -> None:
@@ -20,6 +21,7 @@ def test_load_config_with_partial_override(tmp_path) -> None:
         "data": {
             "image_root": "custom/raw",
             "loader": {"batch_size": 8, "num_workers": 0},
+            "lmdb": {"enabled": False},
         },
         "trainer": {"epochs": 2, "checkpoint_dir": "custom/ckpt"},
         "seed": {"seed": 123},
@@ -34,6 +36,7 @@ def test_load_config_with_partial_override(tmp_path) -> None:
     assert config.data.loader.batch_size == 8
     assert config.data.loader.num_workers == 0
     assert config.data.loader.pin_memory is True
+    assert config.data.lmdb.enabled is False
     assert config.trainer.epochs == 2
     assert config.trainer.checkpoint_dir == (project_root / "custom/ckpt").resolve()
     assert config.trainer.learning_rate == 1e-3
