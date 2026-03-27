@@ -1,9 +1,11 @@
-﻿"""CLI entrypoint for histoclass pipeline."""
+"""CLI entrypoint for histoclass pipeline."""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
+
+from histoclass import project_root
 
 from .pipeline import PipelineMode, format_result_for_console, run_pipeline_from_paths
 
@@ -18,10 +20,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="IDC patch classification pipeline runner.",
     )
     parser.add_argument(
-        "--config",
-        type=Path,
-        default=None,
-        help="Path to JSON config file. Uses default config when omitted.",
+        "config_name",
+        type=str,
+        help="Config name (resolved as configs/<name>.json) or direct JSON path.",
     )
     parser.add_argument(
         "--mode",
@@ -39,6 +40,22 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def resolve_config_path(config_name: str) -> Path:
+    """@brief 解析配置参数；Resolve config CLI argument.
+
+    @param config_name 配置名或 JSON 路径；Config name or JSON path.
+    @return 解析后的 JSON 配置绝对路径；Resolved absolute JSON config path.
+    """
+    candidate = Path(config_name)
+    if candidate.suffix.lower() == ".json":
+        return candidate.expanduser().resolve()
+
+    if candidate.is_absolute() or len(candidate.parts) > 1:
+        return candidate.with_suffix(".json").expanduser().resolve()
+
+    return (project_root() / "configs" / f"{config_name}.json").resolve()
+
+
 def main(argv: list[str] | None = None) -> int:
     """@brief CLI 主函数；CLI main function.
 
@@ -48,9 +65,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    config_path = resolve_config_path(args.config_name)
     mode = PipelineMode(args.mode)
     result = run_pipeline_from_paths(
-        config_path=args.config,
+        config_path=config_path,
         mode=mode,
         checkpoint_path=args.checkpoint,
     )
