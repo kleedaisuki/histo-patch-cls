@@ -262,13 +262,14 @@ def _parse_loader_schema(section: Mapping[str, Any]) -> LoaderSchema:
 def _parse_lmdb_schema(section: Mapping[str, Any], *, config_dir: Path) -> LmdbSchema:
     _ensure_allowed_keys(
         section,
-        allowed={"enabled", "path", "map_size_bytes"},
+        allowed={"enabled", "use_caches", "path", "map_size_bytes"},
         scope="config.data.lmdb",
     )
     path_raw = section.get("path")
     path = None if path_raw is None else _resolve_path(Path(str(path_raw)), base_dir=config_dir)
     return LmdbSchema(
         enabled=bool(section.get("enabled", True)),
+        use_caches=bool(section.get("use_caches", True)),
         path=path,
         map_size_bytes=int(section.get("map_size_bytes", 8 * 1024 * 1024 * 1024)),
     )

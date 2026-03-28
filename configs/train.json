@@ -31,6 +31,7 @@
         },
         "lmdb": {
             "enabled": true,
+            "use_caches": true,
             "path": null,
             "map_size_bytes": 34359738368
         }
@@ -53,7 +54,7 @@
         "pos_weight": 2.5,
         "log_every_n_steps": 100,
         "checkpoint_dir": "outputs/checkpoints",
-        "save_checkpoint_each_epoch": false
+        "save_checkpoint_each_epoch": true
     },
     "evaluator": {
         "threshold": 0.5,

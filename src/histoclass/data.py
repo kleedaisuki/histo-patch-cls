@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 from dataclasses import dataclass
+import hashlib
 from io import BytesIO
+import json
+import multiprocessing
 from pathlib import Path
 from random import Random
-import concurrent.futures
-import multiprocessing
 from typing import Iterable, Sequence
 
 import lmdb
@@ -58,6 +60,7 @@ class LmdbSchema:
     """@brief LMDB 缓存配置；LMDB cache schema."""
 
     enabled: bool = True
+    use_caches: bool = True
     path: Path | None = None
     map_size_bytes: int = 8 * 1024 * 1024 * 1024
 
@@ -460,6 +463,21 @@ def _prepare_lmdb_cache(
     )
     resolved_path = lmdb_path.expanduser().resolve()
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path = config.image_root.parent / "processed" / "lmdb_meta.json"
+    meta_path = meta_path.expanduser().resolve()
+
+    if config.lmdb.use_caches and _is_lmdb_cache_reusable(
+        meta_path=meta_path,
+        lmdb_path=resolved_path,
+        records=records,
+        map_size_bytes=config.lmdb.map_size_bytes,
+    ):
+        LOGGER.info(
+            "LMDB cache hit: reusing existing cache without warmup. lmdb_path=%s, meta_path=%s",
+            resolved_path,
+            meta_path,
+        )
+        return resolved_path
 
     LOGGER.info("Preparing LMDB cache at: %s", resolved_path)
     env = lmdb.open(
@@ -521,7 +539,91 @@ def _prepare_lmdb_cache(
         inserted,
         resolved_path,
     )
+    _write_lmdb_meta(
+        meta_path=meta_path,
+        lmdb_path=resolved_path,
+        records=records,
+        map_size_bytes=config.lmdb.map_size_bytes,
+    )
     return resolved_path
+
+
+def _is_lmdb_cache_reusable(
+    *,
+    meta_path: Path,
+    lmdb_path: Path,
+    records: Sequence[PatchRecord],
+    map_size_bytes: int,
+) -> bool:
+    """@brief 判断 LMDB 缓存是否可复用；Check whether LMDB cache can be reused."""
+    if not lmdb_path.exists() or not meta_path.exists():
+        return False
+
+    payload = _load_lmdb_meta(meta_path)
+    if payload is None:
+        return False
+
+    expected = {
+        "schema_version": 1,
+        "lmdb_path": str(lmdb_path),
+        "map_size_bytes": map_size_bytes,
+        "records_count": len(records),
+        "records_fingerprint": _records_fingerprint(records),
+    }
+    for key, value in expected.items():
+        if payload.get(key) != value:
+            return False
+    return True
+
+
+def _write_lmdb_meta(
+    *,
+    meta_path: Path,
+    lmdb_path: Path,
+    records: Sequence[PatchRecord],
+    map_size_bytes: int,
+) -> None:
+    """@brief 写入 LMDB 元数据缓存；Persist LMDB metadata cache."""
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "lmdb_path": str(lmdb_path),
+        "map_size_bytes": map_size_bytes,
+        "records_count": len(records),
+        "records_fingerprint": _records_fingerprint(records),
+    }
+    meta_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    LOGGER.info("LMDB metadata cache updated at: %s", meta_path)
+
+
+def _load_lmdb_meta(meta_path: Path) -> dict[str, object] | None:
+    """@brief 读取 LMDB 元数据缓存；Load LMDB metadata cache."""
+    try:
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        LOGGER.warning("Failed to read LMDB metadata cache: %s", meta_path)
+        return None
+    if not isinstance(payload, dict):
+        LOGGER.warning("Invalid LMDB metadata payload type: %s", type(payload).__name__)
+        return None
+    return payload
+
+
+def _records_fingerprint(records: Sequence[PatchRecord]) -> str:
+    """@brief 样本集合指纹；Build fingerprint for record collection."""
+    hasher = hashlib.sha256()
+    for record in records:
+        stat = record.path.stat()
+        hasher.update(str(record.path).encode("utf-8"))
+        hasher.update(b"|")
+        hasher.update(str(stat.st_size).encode("ascii"))
+        hasher.update(b"|")
+        hasher.update(str(stat.st_mtime_ns).encode("ascii"))
+        hasher.update(b"\n")
+    return hasher.hexdigest()
 
 
 def _record_key(path: Path) -> bytes:

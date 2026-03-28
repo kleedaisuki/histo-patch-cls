@@ -31,6 +31,7 @@
         },
         "lmdb": {
             "enabled": true,
+            "use_caches": true,
             "path": null,
             "map_size_bytes": 34359738368
         }
