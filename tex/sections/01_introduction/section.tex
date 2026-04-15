@@ -11,11 +11,4 @@
 
 在此基础上，本文采用可切换的预训练 ResNet 主干网络（backbone）与轻量分类头构建端到端基线，并在统一设置下组织两类彼此相关的经验比较：其一是不同 backbone 的基线比较，用以观察标准深度模型在严格 patient-wise 设定下能够达到的性能边界；其二是 patient-wise 与 patch-wise 两种切分协议的比较，用以检验评估边界变化会如何影响训练表现与验证表现之间的对应关系。与此同时，针对 IDC 数据中的类别不平衡（class imbalance），本文在数据与优化两侧同时保留 weighted sampler 与损失加权等控制手段，以便在同一实验框架内讨论召回率（recall）、特异度（specificity）、F1-score 与 Balanced Accuracy 等指标之间的权衡。
 
-进一步地，本文并不把这些设计仅仅视为若干工程安排，而是通过问题形式化与优化分析，将 patient-grouped distribution、代价敏感训练（cost-sensitive training）与阈值化决策（thresholded decision rule）置于统一表述之下。换言之，本文希望强调的是：在数字病理这类高相关、强异质的数据环境中，可信结论不仅依赖于模型本身，还依赖于实验协议、数据流治理、理论表述与工程实现之间是否保持一致。基于这一立场，本文旨在为 IDC patch classification 提供一个可复验、可扩展且便于后续消融与比较的实证研究基线。
-
-综上，本文的主要贡献可以概括为：
-\begin{enumerate}
-    \item 我们围绕 IDC patch classification 构建了一个模块化、配置驱动且可复现的实验框架，将数据准备、模型构建、训练、评估与应用层编排解耦，并在统一协议下组织 backbone 基线比较与切分协议比较，从而为该任务提供一个可复验、可扩展且便于后续消融研究的实证基线；
-    \item 我们将数据流中的方法学风险显式纳入实验设计，把 patient-wise split 作为正式评估的核心约束，并在数据准备流水线中结合 weighted sampler、类别不平衡控制、缓存与可追踪批次结构，系统回应患者内相关性、采样偏置与训练分布失衡等问题，使结果解释建立在更可信的数据边界之上；
-    \item 我们不仅给出工程实现，而且从问题形式化与理论动机出发，对 patient-grouped distribution、代价敏感训练（cost-sensitive training）与阈值化决策（thresholded decision rule）进行统一表述和分析，使后续实验现象能够被置于同一个统计学习框架下理解，而不只是被当作若干彼此分离的工程经验。
-\end{enumerate}
+进一步地，本文并不把这些设计仅仅视为若干工程安排，而是通过问题形式化与优化分析，将 patient-grouped distribution、代价敏感训练（cost-sensitive training）与阈值化决策（thresholded decision rule）置于统一表述之下。换言之，本文希望强调的是：在数字病理这类高相关、强异质的数据环境中，可信结论不仅依赖于模型本身，还依赖于实验协议、数据流治理、理论表述与工程实现之间是否保持一致。基于这一立场，本文旨在为 IDC patch classification 提供一个可复验、可扩展且便于后续消融与比较的实证研究基线；其与既有工作的具体关系与本文定位，将在下一节结合相关研究进一步讨论。

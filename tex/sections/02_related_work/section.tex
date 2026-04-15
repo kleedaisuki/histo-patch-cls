@@ -1,37 +1,35 @@
-﻿\section{Related Work}
+\section{Related Work}
 \label{sec:related_work}
 
-围绕乳腺组织病理图像（breast histopathology image）分析的研究，相关工作大体可以沿三条主线展开：其一，是数字病理（digital pathology）与计算病理学（computational pathology）中从传统特征工程走向深度学习（deep learning）的总体方法演进；其二，是面向乳腺癌、尤其是浸润性导管癌（invasive ductal carcinoma, IDC）的图像块级（patch-level）分类研究如何逐步转向端到端深度学习（end-to-end deep learning）框架；其三，则是医学影像人工智能中日益受到重视的实验协议、数据泄漏（data leakage）与可复现性（reproducibility）问题。本文的工作正是处在这三条线索的交叉点上：任务层面属于 IDC patch 二分类，方法层面强调端到端深度学习基线，实验层面则将 patient-wise 划分与配置驱动复现作为基本前提。
+围绕乳腺组织病理图像（breast histopathology image）分析的相关工作，可以归纳为三条彼此关联的研究线索：数字病理（digital pathology）从人工设计特征（hand-crafted features）转向深度学习（deep learning）的总体演进，IDC 图像块级（patch-level）分类中端到端学习（end-to-end learning）与迁移学习（transfer learning）的应用，以及医学人工智能（medical AI）中围绕评估协议、数据泄漏（data leakage）与可复现性（reproducibility）的持续讨论。本文的工作并不试图在网络结构上继续堆叠复杂模块，而是立足于这三条线索的交汇处：以端到端深度学习基线为对象，在严格协议与统一形式化约束下开展可复验的实证研究。
 
-\subsection{From Hand-Crafted Features to Deep Learning in Digital Pathology}
+\subsection{Deep Learning in Digital Pathology}
 
-早期的组织病理图像分析方法，大多建立在人工设计特征（hand-crafted features）与浅层分类器之上，例如颜色统计、纹理描述子、形态学特征以及基于细胞核分割的结构化表示。这类方法在特定场景中具有一定解释性，但其性能高度依赖预处理质量、特征设计经验以及任务先验，难以适应真实病理图像中广泛存在的染色变异（stain variation）、组织异质性（tissue heterogeneity）与跨中心域偏移（domain shift）
-\cite{Komura2018,Litjens2017}。随着卷积神经网络（convolutional neural network, CNN）在视觉任务中的成功，数字病理研究逐渐从“先提特征、再做分类”的流水线，转向由网络直接从像素中学习判别表示的深度学习范式。
+早期组织病理图像分析多依赖颜色统计、纹理描述子、形态学特征及其与浅层分类器的组合。这类方法具有一定可解释性，但对预处理质量、特征设计经验和场景先验高度敏感，难以稳健应对染色变异（stain variation）、组织异质性（tissue heterogeneity）和跨中心分布偏移（domain shift）\cite{Komura2018,Litjens2017}。随着卷积神经网络（convolutional neural network, CNN）在视觉任务中的成功，数字病理逐步转向由模型直接从像素中学习层级化表征（hierarchical representations）的范式\cite{Litjens2017,vanDerLaak2021}。
 
-已有综述普遍认为，这种范式迁移并不仅仅意味着分类器更强，而是意味着表示学习（representation learning）方式本身发生了根本变化：模型不再依赖研究者手工规定“什么是有用特征”，而是通过多层非线性映射，在监督信号下自动学习与诊断目标相关的层级化表征（hierarchical representations）\cite{Litjens2017,vanDerLaak2021,Huang2025,Rad2025}。对于数字病理而言，这一点尤为重要，因为病理判别线索常常跨越多个尺度：既包含细胞级别的核异型性（nuclear atypia）、腺体结构和边界模式，也包含局部组织排列与更高层级上下文。深度学习，尤其是端到端训练的 CNN 及其后继模型，使这种多尺度统计规律可以在统一优化目标下被共同吸收，而不必被割裂成若干彼此孤立的人工模块。
+这一转向的意义并不只是“分类器更强”，而在于表示学习（representation learning）与最终诊断目标之间建立了更直接的耦合。对于病理图像而言，判别线索常常横跨细胞级别的核异型性（nuclear atypia）、腺体结构与局部组织排列等多个尺度，端到端模型能够在统一损失下共同吸收这些统计模式，而不必将其拆解为若干彼此割裂的人工模块\cite{vanDerLaak2021,Huang2025,Rad2025}。因此，深度学习已成为计算病理学中的主流方法基础，而“如何在特定任务中建立可信基线”逐渐取代“是否使用深度学习”本身，成为更关键的问题。
 
-进一步地，端到端深度学习在计算病理中的意义还在于，它将预处理、特征抽取与分类决策更紧密地耦合到了同一训练目标之中。相比“固定特征提取器 + 外部分类器”的非端到端（non-end-to-end）路线，端到端模型能够直接根据最终分类损失更新全部可学习参数，从而让前端视觉特征与后端判别边界共同适配具体任务\cite{Yan2020,Zou2022}。这一点对于组织病理图像尤其关键，因为病理图像中的有效模式并不总是与自然图像中的通用纹理完全一致；在乳腺组织病理场景下，肿瘤区域与非肿瘤区域的差别，往往体现为微妙的局部结构重排与染色模式变化，而非显著的对象轮廓差异。因而，能够直接针对病理监督信号进行整体优化的端到端深度学习，逐渐成为该领域的主流研究范式。
+\subsection{End-to-End Learning for Breast Histopathology and IDC Classification}
 
-\subsection{End-to-End Deep Learning for Breast Histopathology and IDC Classification}
+在乳腺组织病理分析中，深度学习已经被广泛用于良恶性分类（benign--malignant classification）、亚型识别、分级（grading）以及更高层级的切片预测任务\cite{Araujo2017,Hameed2020,Yan2020}。Ara{\'u}jo 等较早展示了 CNN 在乳腺癌组织学图像分类中的有效性，说明深层表示可以显著替代传统特征工程\cite{Araujo2017}；随后，预训练骨干网络、注意力机制和更复杂的特征聚合策略被不断引入乳腺病理分类，以增强对细粒度纹理与局部上下文的建模能力\cite{Yan2020,Zou2022}。
 
-在乳腺组织病理图像分析中，深度学习已被广泛用于良恶性分类（benign--malignant classification）、亚型识别、分级（grading）以及更高层级的切片预测任务。相较于传统方法，端到端 CNN 及迁移学习（transfer learning）方法通常能够在不显式设计纹理或形态学特征的前提下，直接从图像中学习与诊断相关的表示，因此成为乳腺病理图像分类研究的核心路线之一\cite{Araujo2017,Hameed2020,Yan2020}。Ara{\'u}jo 等较早展示了 CNN 在乳腺癌组织学图像分类中的有效性，说明深层表示能够替代相当一部分人工特征工程\cite{Araujo2017}；随后，一系列工作进一步将预训练骨干网络、注意力机制、高阶统计池化（high-order pooling）或混合网络结构引入乳腺病理分类任务，以提升模型对复杂纹理与组织上下文的建模能力\cite{Yan2020,Zou2022}。
+具体到浸润性导管癌（invasive ductal carcinoma, IDC）识别，相关研究大致分为两类：一类面向全视野切片（whole-slide image, WSI）或局部区域的检测与定位，典型如 Cruz-Roa 等将 CNN 用于乳腺癌切片中的 IDC 区域检测\cite{CruzRoa2014}；另一类则围绕公开 patch 数据集开展局部二分类研究，即直接判断图像块是否包含 IDC。后者因算力开销较低、数据组织清晰而成为最常见的基准设定。已有研究表明，基于 ImageNet 预训练的 ResNet、DenseNet 等模型能够在这一任务上建立有竞争力的基线\cite{Celik2020,Abdolahi2020}。进一步地，Voon 等对多种 CNN 架构的比较显示，迁移学习后的端到端模型通常可以提供稳定性能，但网络更深或参数更多并不必然带来线性提升\cite{Voon2022}。这意味着，对于 IDC patch classification 而言，模型复杂度并不是唯一值得追逐的方向，实验边界与比较方式同样会决定结论的含义。
 
-具体到 IDC 识别，相关研究大体可分为两类。第一类是在全视野切片（whole-slide image, WSI）或其局部区域上定位和识别 IDC 区域，典型工作如 Cruz-Roa 等将 CNN 应用于乳腺癌切片中的 IDC 区域检测，较早证明了深度学习在该任务上的可行性\cite{CruzRoa2014}。第二类则是围绕公开 patch 数据集开展的局部二分类研究，即直接判断某个图像块是否包含 IDC。由于 patch 级任务在算力和数据组织上更易操作，它逐渐成为 IDC 自动识别研究中最常见的基准设定。Celik 和 Talo 使用深度迁移学习（deep transfer learning）在公开 IDC patch 数据集上进行自动检测，表明预训练 ResNet 与 DenseNet 等模型能够在该任务中建立强基线\cite{Celik2020}；Abdolahi 等则从 WSI 到 patch 的角度讨论了 IDC 自动分类问题，进一步强调深度表示在替代传统特征工程方面的优势\cite{Abdolahi2020}。
+\subsection{Evaluation Protocols, Data Leakage, and Reproducibility}
 
-更近一些的研究则开始从“能否做出高分”转向“端到端框架内部应如何设计”的问题。例如，一些工作将 IDC 或乳腺病理分类网络区分为非端到端和端到端两类：前者把 CNN 当作固定特征提取器，再交由额外模块完成分类；后者则直接在统一损失下训练完整网络，使特征学习与判别目标共同优化\cite{Zou2022}. 在这一脉络中，迁移学习实际上成为端到端深度学习在医学小样本或中等规模数据集上的自然延伸：模型虽以 ImageNet 等自然图像数据预训练，但在目标任务上仍通过反向传播（back-propagation）进行整体微调，从而使通用视觉特征逐渐适应乳腺组织病理图像的统计结构\cite{Celik2020,Voon2022}. Voon 等对七种 CNN 架构在 IDC 分级任务上的比较也表明，经过迁移学习后的端到端 CNN 往往能够提供稳定且具有竞争力的性能，而架构深度或参数规模并不必然直接转化为更强的泛化收益\cite{Voon2022}。
+与自然图像分类相比，医学影像数据更容易违反独立同分布（independent and identically distributed, i.i.d.）假设。一个患者往往对应多个切片、多个区域或大量高度相关的 patch；若划分时不尊重患者、切片或体数据（volume）的层级结构，训练集与验证集就可能共享强相关样本，从而使模型利用不应出现在泛化评估中的捷径信号（shortcut signals）。Yagis 等在脑 MRI 任务中展示了受试者级相关性被破坏时性能估计会发生显著偏移\cite{Yagis2021}；Tampu 等进一步证明，不恰当的切分策略足以显著膨胀公开 OCT 数据集上的测试性能\cite{Tampu2022}。虽然这些结果来自不同模态，但其方法学含义对病理 patch 数据同样成立。
 
-从研究趋势看，乳腺病理图像分析已经从“是否使用深度学习”转向“如何使用更合理的端到端深度学习”。一方面，更复杂的注意力、双流（dual-stream）、高阶特征聚合与混合模型不断被提出，用以增强对局部上下文和细粒度纹理的刻画\cite{Yan2020,Zou2022}；另一方面，计算病理的更大图景又在推动研究从 patch 级 CNN 向弱监督 WSI 学习（weakly supervised WSI learning）、多实例学习（multiple instance learning, MIL）和基础模型（foundation model）扩展\cite{Campanella2019,Huang2025}. 但对于 IDC patch classification 这一经典任务而言，一个经常被忽视的事实是：在实验协议足够严格之前，继续堆叠更复杂的模型并不一定能带来更可信的结论。也正因如此，建立一个干净、可复验、以端到端深度学习为核心基线的实验框架，仍然具有现实价值。
+对数字病理而言，这一问题往往更加隐蔽，因为 patch 数据通常源于对少量 WSI 的密集裁剪，相邻样本之间天然共享组织纹理、染色风格与扫描噪声。若直接采用 patch-wise 随机划分，模型就可能在训练阶段接触与验证样本高度相似的患者内模式，从而夸大其对未见患者的泛化能力。近年来的综述也不断强调，外部泛化不足、验证设计薄弱和结果难以复现，仍是数字病理走向可信临床应用的核心障碍\cite{vanDerLaak2021,McGenity2024,Rad2025}。
 
-\subsection{Evaluation Protocols, Data Leakage, and Reproducibility in Medical AI}
-
-与自然图像任务相比，医学影像与数字病理中的样本独立性假设往往更容易被破坏。一个患者可能对应多个切片、多个区域甚至多个高度相似的 patch；如果数据划分不尊重患者、切片或体数据（volume）的层级结构，那么训练集与测试集之间就可能共享强相关样本，从而使模型利用到不应出现于泛化评估中的捷径信号（shortcut signals）。近年来，关于数据泄漏会显著抬高性能估计的证据已经在多个医学 AI 场景中被系统揭示。Yagis 等在脑 MRI 分类任务中展示了受试者级相关性被破坏时性能评估会受到明显影响\cite{Yagis2021}；Tampu 等进一步证明，在公开 OCT 数据集中，不恰当的切分策略足以显著膨胀测试准确率，并明确指出医学影像数据应在受试者或体数据层面完成分割，而非在相关切片层面随机拆分\cite{Tampu2022}. 这类发现虽然来自不同模态，但其方法学含义对病理 patch 数据同样适用。
-
-对数字病理而言，这一问题甚至更加隐蔽。因为 patch 数据通常来自对少量 WSI 的密集裁剪，相邻 patch 之间可能共享组织纹理、染色风格和扫描噪声；若仅在 patch 级随机划分，模型就可能在训练阶段“见过”与验证样本高度相似的视觉模式，从而夸大其对新患者的泛化能力。已有计算病理综述亦不断强调，数字病理走向临床应用所面临的关键障碍之一，正是外部泛化、验证设计与结果复现不足\cite{vanDerLaak2021,McGenity2024,Rad2025}. 换言之，在医学任务中，评估协议本身就是方法的一部分，而不是实验结束后才附带说明的实现细节。
-
-可复现性问题与此密切相关。对于许多医学深度学习研究而言，模型性能不仅取决于网络结构，还取决于配置管理、随机种子、数据抽样、损失加权、阈值选择、日志记录和 checkpoint 保存等一整套工程因素。若这些因素缺乏系统控制，即使复用了同一公开数据集，不同研究之间的结果也往往难以公平比较。数字病理领域的最新综述已经开始把这类问题与“可信临床 AI（trustworthy clinical AI）”联系起来，认为真正有价值的研究不仅要报告高分，还应提供能够被复查和扩展的实验基础设施\cite{McGenity2024,Huang2025}. 本文的立场与这一趋势一致：我们并不把 patient-wise split、配置驱动实验、训练与评估解耦视作外围工程，而是将其视为端到端深度学习在 IDC patch 任务上成立的前提条件。
+与协议问题相伴的，是可复现性对实验结论的持续影响。对于医学深度学习研究，最终性能不仅受网络结构影响，也受配置管理、随机种子、数据采样、损失加权、阈值选择、日志记录与 checkpoint 保存等工程因素影响。若这些变量缺乏系统控制，即使使用同一公开数据集，不同研究之间的结果也很难公平比较\cite{McGenity2024,Huang2025}。因此，在这一研究脉络下，patient-wise 划分、配置驱动实验和训练/评估解耦不应被视为外围实现细节，而应被视为方法有效性的组成条件。
 
 \subsection{Positioning of This Work}
 
-综合来看，现有研究已经充分证明深度学习，尤其是端到端 CNN 与迁移学习框架，在乳腺组织病理和 IDC 相关任务中具有很强潜力；同时，越来越多的方法学研究又提醒我们，若忽视患者层级的数据边界与实验复现细节，这些性能数字很可能被高估。本文正是基于这一双重认识展开：在方法上，我们有意采用结构清晰、可稳定训练的端到端深度学习骨干网络作为实验起点，而不是过早引入大量复杂模块；在协议上，我们显式强调 patient-wise 划分，避免 patch-level 随机拆分带来的信息泄漏；在系统实现上，我们进一步将数据、模型、训练、评估与应用层编排解耦，以支持更加透明的比较和后续扩展。
+基于上述文献脉络，本文的定位可以概括为以下三个相互支撑的方面：
+\begin{enumerate}
+    \item 在实证层面，本文以可切换的预训练 ResNet 主干网络（backbone）和轻量分类头为统一起点，构建模块化、配置驱动且可复现的实验框架，并在统一条件下组织 backbone 基线比较与切分协议比较；
+    \item 在协议层面，本文将 patient-wise split、类别不平衡控制、weighted sampler 与可追踪的数据准备流水线纳入同一数据流治理视角，以降低患者内相关性、采样偏置与训练分布失衡对结论的干扰；
+    \item 在理论层面，本文进一步将 patient-grouped distribution、代价敏感训练（cost-sensitive training）与阈值化决策（thresholded decision rule）置于统一形式化表述之下，为经验结果提供可解释的统计学习参照。
+\end{enumerate}
 
-因此，本文与已有工作的区别并不主要体现在“又提出了一个更复杂的分类头”，而体现在：我们试图把 IDC patch classification 从一个容易被实验捷径误导的高分游戏，重新拉回到一个端到端深度学习、严格评估协议与工程可复现性相互一致的实证研究框架之中。这样的定位，也为后续的方法比较与消融分析提供了更加可信的出发点。
+因此，本文与已有工作的区别并不主要体现在额外设计一个更复杂的分类头，而体现在：我们试图把 IDC patch classification 从一个容易被实验捷径误导的局部高分问题，重新组织为一个由实证基线、协议边界与形式分析共同支撑的研究对象。这样的定位既回应了端到端深度学习基线研究的需求，也回应了医学 AI 对严格评估与可复现性的要求，并为后续的方法比较、消融分析与系统扩展提供更可信的起点。
