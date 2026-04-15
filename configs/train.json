@@ -18,6 +18,7 @@
             ]
         },
         "split": {
+            "strategy": "patient",
             "val_ratio": 0.2,
             "seed": 42
         },

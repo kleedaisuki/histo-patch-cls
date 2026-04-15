@@ -39,6 +39,7 @@ class ImageSchema:
 class SplitSchema:
     """@brief 按患者切分配置；Patient-wise split schema."""
 
+    strategy: str = "patient"
     val_ratio: float = 0.2
     seed: int = 42
 
@@ -316,6 +317,65 @@ def split_by_patient(
     return DatasetSplit(train=train_records, val=val_records)
 
 
+def split_by_patch_random(
+    records: Sequence[PatchRecord], schema: SplitSchema
+) -> DatasetSplit:
+    """@brief Patch 级随机切分；Patch-level random split."""
+    LOGGER.info(
+        "Splitting %d records by patch-level random with val_ratio=%.4f, seed=%d",
+        len(records),
+        schema.val_ratio,
+        schema.seed,
+    )
+    if len(records) < 2:
+        LOGGER.error("Split failed: less than 2 records found (%d)", len(records))
+        raise ValueError("At least 2 records are required for train/val split.")
+
+    if not (0.0 < schema.val_ratio < 1.0):
+        LOGGER.error("Invalid split.val_ratio: %.6f", schema.val_ratio)
+        raise ValueError("split.val_ratio must be in (0, 1).")
+
+    rng = Random(schema.seed)
+    shuffled = list(records)
+    rng.shuffle(shuffled)
+
+    val_count = max(
+        1, min(len(shuffled) - 1, int(round(len(shuffled) * schema.val_ratio)))
+    )
+    val_records = tuple(shuffled[:val_count])
+    train_records = tuple(shuffled[val_count:])
+
+    if not train_records or not val_records:
+        LOGGER.error(
+            "Invalid split produced empty set. train=%d, val=%d",
+            len(train_records),
+            len(val_records),
+        )
+        raise RuntimeError("Invalid split produced an empty train or val set.")
+
+    train_patients = {record.patient_id for record in train_records}
+    val_patients = {record.patient_id for record in val_records}
+    overlap = train_patients & val_patients
+    LOGGER.info(
+        "Patch-level random split done: train=%d, val=%d, patient_overlap=%d",
+        len(train_records),
+        len(val_records),
+        len(overlap),
+    )
+    return DatasetSplit(train=train_records, val=val_records)
+
+
+def split_records(records: Sequence[PatchRecord], schema: SplitSchema) -> DatasetSplit:
+    """@brief 按策略执行数据切分；Dispatch split strategy."""
+    if schema.strategy == "patient":
+        return split_by_patient(records, schema)
+    if schema.strategy == "patch_random":
+        return split_by_patch_random(records, schema)
+
+    LOGGER.error("Unknown split.strategy: %s", schema.strategy)
+    raise ValueError("split.strategy must be one of {'patient', 'patch_random'}.")
+
+
 def collate_patch_examples(examples: Sequence[PatchExample]) -> Batch:
     """@brief 自定义拼接函数；Custom collate function producing Batch."""
     images = torch.stack([example.image for example in examples], dim=0)
@@ -334,7 +394,7 @@ def build_data_module(config: DataModuleConfig) -> DataModule:
     )
 
     records = discover_records(config.image_root)
-    split = split_by_patient(records, config.split)
+    split = split_records(records, config.split)
 
     train_tf = _build_train_basic(config.image)
     eval_tf = _build_eval_basic(config.image)
@@ -646,5 +706,7 @@ __all__ = [
     "build_data_module",
     "collate_patch_examples",
     "discover_records",
+    "split_by_patch_random",
     "split_by_patient",
+    "split_records",
 ]

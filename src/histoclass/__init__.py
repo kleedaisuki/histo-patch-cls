@@ -26,7 +26,9 @@ from .data import (
     build_data_module,
     collate_patch_examples,
     discover_records,
+    split_by_patch_random,
     split_by_patient,
+    split_records,
 )
 from .engine import (
     EpochResult,
@@ -79,9 +81,11 @@ __all__ = [
     "config_to_dict",
     "default_config_path",
     "discover_records",
+    "split_by_patch_random",
     "load_config",
     "parse_config_dict",
     "project_root",
     "save_config",
     "split_by_patient",
+    "split_records",
 ]

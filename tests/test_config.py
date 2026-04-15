@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from histoclass.config import AppConfig, load_config
 
 
@@ -15,6 +17,7 @@ def test_load_default_config_smoke() -> None:
     assert config.seed.seed == 42
     assert config.data.lmdb.enabled is True
     assert config.data.lmdb.use_caches is True
+    assert config.data.split.strategy == "patient"
     assert config.logging.level == "INFO"
     assert config.logging.streams["INFO"] == "stdout"
     assert config.logging.streams["ERROR"] == "stderr"
@@ -25,6 +28,7 @@ def test_load_config_with_partial_override(tmp_path) -> None:
     custom = {
         "data": {
             "image_root": "custom/raw",
+            "split": {"strategy": "patch_random"},
             "loader": {"batch_size": 8, "num_workers": 0},
             "lmdb": {"enabled": False, "use_caches": False},
         },
@@ -50,6 +54,7 @@ def test_load_config_with_partial_override(tmp_path) -> None:
     assert config.data.image_root == (project_root / "custom/raw").resolve()
     assert config.data.loader.batch_size == 8
     assert config.data.loader.num_workers == 0
+    assert config.data.split.strategy == "patch_random"
     assert config.data.loader.pin_memory is True
     assert config.data.lmdb.enabled is False
     assert config.data.lmdb.use_caches is False
@@ -62,3 +67,17 @@ def test_load_config_with_partial_override(tmp_path) -> None:
     assert config.logging.streams["DEBUG"] == "file"
     assert config.logging.streams["ERROR"] == "file"
     assert config.logging.file_path == (project_root / "outputs/logs/test.log").resolve()
+
+
+def test_load_config_with_invalid_split_strategy_raises(tmp_path) -> None:
+    custom = {
+        "data": {
+            "image_root": "custom/raw",
+            "split": {"strategy": "invalid_strategy"},
+        }
+    }
+    config_path = tmp_path / "bad.json"
+    config_path.write_text(json.dumps(custom), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="config.data.split.strategy"):
+        load_config(config_path)

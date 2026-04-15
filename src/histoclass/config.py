@@ -229,8 +229,18 @@ def _parse_image_schema(section: Mapping[str, Any]) -> ImageSchema:
 
 
 def _parse_split_schema(section: Mapping[str, Any]) -> SplitSchema:
-    _ensure_allowed_keys(section, allowed={"val_ratio", "seed"}, scope="config.data.split")
+    _ensure_allowed_keys(
+        section,
+        allowed={"strategy", "val_ratio", "seed"},
+        scope="config.data.split",
+    )
+    strategy = str(section.get("strategy", "patient")).strip().lower()
+    if strategy not in {"patient", "patch_random"}:
+        raise ValueError(
+            "config.data.split.strategy must be one of {'patient', 'patch_random'}."
+        )
     return SplitSchema(
+        strategy=strategy,
         val_ratio=float(section.get("val_ratio", 0.2)),
         seed=int(section.get("seed", 42)),
     )
