@@ -10,13 +10,25 @@
 \begin{equation}
     h = g_{\phi}(x), \qquad h \in \mathbb{R}^{d},
 \end{equation}
-其中，$g_{\phi}(\cdot)$ 表示由参数 $\phi$ 参数化的卷积主干网络，$d$ 表示全局池化（global pooling）之后、由主干结构决定的特征维度。在本文实现中，主干网络从 ResNet 家族中实例化，支持 ResNet-18、ResNet-34 与 ResNet-50。原始主干末端的全连接层（fully connected layer）被替换为恒等映射（identity mapping），从而使主干仅承担特征提取器（feature extractor）的角色。对于标准的 ImageNet 预训练结构，这一设计对应于 ResNet-18/34 的 $d=512$，以及 ResNet-50 的 $d=2048$。
+其中，$g_{\phi}(\cdot)$ 表示由参数 $\phi$ 参数化的卷积主干网络，$d$ 表示全局池化（global pooling）之后、由主干结构决定的特征维度。
+
+本文之所以采用 ResNet，并不只是因为它是经验上常见的视觉骨干，更因为其残差参数化（residual parameterization）在优化景观（optimization landscape）层面提供了更稳定的训练几何。对于深层网络，若直接学习某一层的完整变换 $H(x)$，优化过程往往需要在高度非凸（non-convex）且条件数较差（ill-conditioned）的参数空间中同时协调恒等传递与增量修正。而 ResNet 通过将目标改写为
+\begin{equation}
+    H(x) = x + F(x),
+\end{equation}
+把困难问题重写为围绕恒等映射（identity mapping）的扰动学习（perturbation learning）。
+
+这种重参数化（reparameterization）并不会改变模型的表达能力上界，却会显著改变梯度传播路径与局部曲率结构，使深层网络更容易沿着“接近恒等、逐步偏移”的方向被优化。换言之，残差连接（skip connection）把原本容易退化（degradation）的深层拟合问题，转化为一类更平滑、可达性更强的优化问题，这也是本文将其视为优化层面基座（optimization-oriented backbone）的原因。
+
+对于组织病理图像而言，这一点尤其重要。IDC patch 的判别信息通常表现为局部纹理、腺体结构、染色差异与细胞排列等多尺度形态学线索（multi-scale morphological cues）的组合，而非单一、线性的低层特征。因此，我们希望主干网络既能保持较深层次的表征能力，又不因深度增加而显著恶化训练动力学（training dynamics）。ResNet 正适合承担这一角色：它允许网络在浅层统计模式之上逐层叠加残差修正，从而在保留稳定优化路径的同时，逐步形成更贴近病灶判别边界的特征表征。
+
+在本文实现中，主干网络从 ResNet 家族中实例化，支持 ResNet-18、ResNet-34 与 ResNet-50。原始主干末端的全连接层（fully connected layer）被替换为恒等映射（identity mapping），从而使主干仅承担特征提取器（feature extractor）的角色。对于标准的 ImageNet 预训练结构，这一设计对应于 ResNet-18/34 的 $d=512$，以及 ResNet-50 的 $d=2048$。
 
 我们可以选择使用 ImageNet 预训练权重初始化主干网络。记 $\phi_{0}$ 为主干参数的初始化，则模型可以运行在以下两种情形之一：
 \begin{equation}
     \phi \leftarrow \phi_{0}^{\text{ImageNet}} \quad \text{或} \quad \phi \leftarrow \phi_{0}^{\text{random}},
 \end{equation}
-分别对应于使用预训练初始化与随机初始化。此外，我们还允许在训练过程中冻结主干网络，此时只有分类头参与训练。这使得整个框架不仅支持标准微调（fine-tuning），也支持迁移学习（transfer learning）以及冻结特征（frozen-feature）实验。
+分别对应于使用预训练初始化与随机初始化。从优化视角看，预训练参数并不仅仅提供“更好的特征”，也常常意味着更好的初始盆地（initial basin）：优化器无需从随机曲面出发搜索有效表示，而是从已经编码自然图像局部统计规律的区域继续收敛。与此同时，我们还允许在训练过程中冻结主干网络，此时只有分类头参与训练。这使得整个框架不仅支持标准微调（fine-tuning），也支持迁移学习（transfer learning）以及冻结特征（frozen-feature）实验，并为后续比较“表征迁移”与“整体优化”之间的差异提供了方法学基础。
 
 \subsubsection{Classification Head}
 
@@ -46,18 +58,6 @@
 
 该分类头被刻意设计得较为轻量。主要的表征负担（representational burden）被交给主干网络，而分类头只负责将具有形态学感知能力（morphology-aware）的视觉特征，以较低复杂度投影为二分类诊断证据。这样的设计与组织病理迁移学习实践高度一致：主干网络捕获通用的纹理与结构模式，而分类头则将这些表征专门适配到目标临床判别任务。在我们的实现中，分类头采用如下顺序：
 \texttt{Linear} $\rightarrow$ \texttt{SiLU} $\rightarrow$ \texttt{Dropout} $\rightarrow$ \texttt{Linear(1)}。
-
-\subsubsection{Joint End-to-End Optimization}
-
-本文特别强调的一点在于，整个分类器是以\emph{端到端方式（end-to-end）}训练的。主干网络与分类头共同定义了一个单一的可微映射：
-\begin{equation}
-    z_{\theta}(x) = c_{\omega}(g_{\phi}(x)),
-\end{equation}
-其中，$\theta = (\phi, \omega)$，$g_{\phi}$ 表示主干网络，$c_{\omega}$ 表示分类头。只要主干没有被显式冻结，梯度就会通过整个网络传播：
-\begin{equation}
-    \nabla_{\theta} \mathcal{L} = \left( \nabla_{\phi} \mathcal{L}, \nabla_{\omega} \mathcal{L} \right).
-\end{equation}
-这种端到端耦合非常重要，因为与 IDC 相关的判别结构并不总能被还原为固定的低层纹理描述子（low-level texture descriptors）。联合优化允许特征提取过程本身，随着二分类目标所诱导的病灶敏感决策边界（lesion-sensitive decision boundary）共同适配。
 
 \subsection{Training Objective and Decision Rule}
 \label{subsec:training_objective}
@@ -114,6 +114,21 @@
 其中，$\eta > 0$ 表示学习率（learning rate），$\lambda \ge 0$ 表示权重衰减系数（weight decay coefficient）。默认训练配置包括可调的训练轮数（epoch count）、学习率、权重衰减、梯度裁剪阈值（gradient clipping threshold）、自动混合精度（Automatic Mixed Precision, AMP），以及每轮后可选的检查点保存（checkpoint saving）。
 
 当执行设备支持 CUDA 且开启 AMP 时，前向计算将在自动混合精度环境下执行，同时利用梯度缩放（gradient scaling）来稳定反向传播。这一机制能够提升计算效率，同时不改变优化问题在语义层面的定义。从方法论角度看，AMP 并不是一种新的学习规则；它是实现层面的加速策略，在保持目标函数不变的同时，只改变了部分操作的数值精度。
+
+\subsubsection{Joint End-to-End Optimization}
+
+本文特别强调的一点在于，整个分类器是以\emph{端到端方式（end-to-end）}进行优化的。主干网络与分类头共同定义了一个单一的可微映射：
+\begin{equation}
+    z_{\theta}(x) = c_{\omega}(g_{\phi}(x)),
+\end{equation}
+其中，$\theta = (\phi, \omega)$，$g_{\phi}$ 表示主干网络，$c_{\omega}$ 表示分类头。只要主干没有被显式冻结，梯度就会沿着统一计算图（computational graph）穿过整个模型传播：
+\begin{equation}
+    \nabla_{\theta} \mathcal{L} = \left( \nabla_{\phi} \mathcal{L}, \nabla_{\omega} \mathcal{L} \right).
+\end{equation}
+
+IDC patch 分类并非先固定特征再单独训练判别器，而是在同一个目标函数之下，让表征学习（representation learning）与判别学习（discriminative learning）同步发生。这样的联合优化对于病理图像尤为关键：与 IDC 相关的判别结构并不总能被还原为预先定义的低层纹理描述子（low-level texture descriptors），只有当损失信号持续回传至主干网络时，特征提取过程才会围绕最终二分类边界进行适配。
+
+当然，这种端到端更新并非唯一策略。当主干被冻结时，优化问题会退化为仅对分类头参数 $\omega$ 的条件优化（conditional optimization）；而当主干参与训练时，问题则恢复为对 $\theta=(\phi,\omega)$ 的整体联合最小化。二者共享相同的预测形式，但对应不同的优化自由度（degrees of freedom）与泛化行为（generalization behavior），这也正是本文实验设计中保留两类训练模式的理论动机。
 
 \subsubsection{Gradient Clipping and Checkpointing}
 
