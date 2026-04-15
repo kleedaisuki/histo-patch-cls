@@ -1,0 +1,14 @@
+\begin{table}[t]
+    \centering
+    \caption{Patient-wise split 下不同 ResNet backbone 的基线比较。所有模型均在相同训练协议下训练：输入尺寸为 $50 \times 50$，使用 ImageNet 预训练权重，训练 $20$ 个 epoch，batch size 为 $256$，学习率为 $3\times10^{-4}$，正类权重（positive-class weight）为 $2.5$，并以固定阈值 $0.5$ 在同一验证集上评估。最佳结果以粗体标出。}
+    \label{tab:backbone_baseline_comparison}
+    \begin{tabularx}{\textwidth}{lccccc}
+        \toprule
+        Backbone & Precision & Recall & F1-score & Balanced Accuracy & ROC-AUC \\
+        \midrule
+        ResNet-18 & 0.9089 & 0.9616 & 0.9345 & 0.9603 & 0.9922 \\
+        ResNet-34 & 0.9069 & 0.9593 & 0.9324 & 0.9587 & 0.9921 \\
+        ResNet-50 & \textbf{0.9334} & \textbf{0.9830} & \textbf{0.9575} & \textbf{0.9766} & \textbf{0.9976} \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
