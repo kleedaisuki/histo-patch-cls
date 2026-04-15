@@ -1,25 +1,10 @@
-﻿\section{方法}
+﻿\section{Method}
 \label{sec:method}
 
-本节从两个紧密耦合的视角介绍本文的方法：其一，是用于浸润性导管癌（invasive ductal carcinoma, IDC）图像块分类的\emph{端到端深度学习模型（end-to-end deep learning model）}；其二，是将该模型实例化到可复现训练与评估流程中的\emph{模块化实验框架（modular experiment framework）}。前者定义了假设空间与优化目标，后者规定了数据、配置、执行与测量如何被组织成一个干净且可扩展的系统。二者共同构成了本文在实践层面的核心方法论。
-
-\subsection{方法概述}
-\label{subsec:method_overview}
-
-设 $x \in \mathbb{R}^{H \times W \times 3}$ 表示一个 RGB 乳腺组织病理图像块，$y \in \{0,1\}$ 表示其二分类 IDC 标签，其中 $y=1$ 表示该图像块中存在浸润性导管癌。延续第~\ref{sec:problem_formulation} 节中的形式化定义，我们的目标是学习一个端到端参数化映射
-\begin{equation}
-    f_{\theta}: \mathbb{R}^{H \times W \times 3} \rightarrow [0,1],
-\end{equation}
-其中，$\theta$ 表示所有可训练参数，而 $f_{\theta}(x)$ 用于估计图像块 $x$ 属于 IDC 阳性类别的后验概率。
-
-本文方法以卷积神经网络（Convolutional Neural Network, CNN）主干网络配合轻量级二分类头为核心。我们并不将特征提取、分类器学习与决策过程视为彼此割裂的独立阶段，而是在统一监督目标下对整个网络进行联合优化。从这个意义上说，本文方法遵循的是一种标准但高度有效的\emph{端到端深度学习（end-to-end deep learning）}范式：原始像素输入通过单一的、可微的计算图，被直接映射为任务相关的预测结果。
-
-在系统层面，我们有意识地区分了\emph{数据模块（data module）}、\emph{模型模块（model module）}、\emph{训练引擎（training engine）}、\emph{评估引擎（evaluation engine）}与\emph{应用层流水线（application-level pipeline）}的职责边界。这种分解并不会割裂方法本身；恰恰相反，它保证了每个组件都承担明确且边界清晰的语义责任。由此得到的框架既保持了单向数据流，又支持配置驱动实验，还避免了模型语义与命令行逻辑或编排逻辑之间的纠缠。
-
-\subsection{端到端 IDC 图像块分类器}
+\subsection{End-to-End IDC Patch Classifier}
 \label{subsec:end_to_end_classifier}
 
-\subsubsection{主干网络}
+\subsubsection{Backbone Network}
 
 给定输入图像块 $x$，我们首先通过深度残差网络（Residual Network, ResNet）将其映射为潜在特征向量：
 \begin{equation}
@@ -33,7 +18,7 @@
 \end{equation}
 分别对应于使用预训练初始化与随机初始化。此外，我们还允许在训练过程中冻结主干网络，此时只有分类头参与训练。这使得整个框架不仅支持标准微调（fine-tuning），也支持迁移学习（transfer learning）以及冻结特征（frozen-feature）实验。
 
-\subsubsection{分类头}
+\subsubsection{Classification Head}
 
 在特征提取器之上，我们使用了一个紧凑的多层分类头。设 $h \in \mathbb{R}^{d}$ 表示主干输出的池化表示，则分类头计算过程可写为
 \begin{equation}
@@ -62,7 +47,7 @@
 该分类头被刻意设计得较为轻量。主要的表征负担（representational burden）被交给主干网络，而分类头只负责将具有形态学感知能力（morphology-aware）的视觉特征，以较低复杂度投影为二分类诊断证据。这样的设计与组织病理迁移学习实践高度一致：主干网络捕获通用的纹理与结构模式，而分类头则将这些表征专门适配到目标临床判别任务。在我们的实现中，分类头采用如下顺序：
 \texttt{Linear} $\rightarrow$ \texttt{SiLU} $\rightarrow$ \texttt{Dropout} $\rightarrow$ \texttt{Linear(1)}。
 
-\subsubsection{联合端到端优化}
+\subsubsection{Joint End-to-End Optimization}
 
 本文特别强调的一点在于，整个分类器是以\emph{端到端方式（end-to-end）}训练的。主干网络与分类头共同定义了一个单一的可微映射：
 \begin{equation}
@@ -74,10 +59,10 @@
 \end{equation}
 这种端到端耦合非常重要，因为与 IDC 相关的判别结构并不总能被还原为固定的低层纹理描述子（low-level texture descriptors）。联合优化允许特征提取过程本身，随着二分类目标所诱导的病灶敏感决策边界（lesion-sensitive decision boundary）共同适配。
 
-\subsection{训练目标与决策规则}
+\subsection{Training Objective and Decision Rule}
 \label{subsec:training_objective}
 
-\subsubsection{二分类监督目标}
+\subsubsection{Binary Supervision Objective}
 
 对于包含 $N$ 个图像块的训练集，记 $\{(x_{i}, y_{i})\}_{i=1}^{N}$ 为图像块--标签对。模型输出对数几率 $z_{i} = z_{\theta}(x_{i})$。我们采用带对数几率输入的二元交叉熵损失（binary cross-entropy with logits, BCEWithLogitsLoss）进行优化，该损失以数值稳定（numerically stable）的方式将 Sigmoid 激活与交叉熵合并：
 \begin{equation}
@@ -104,7 +89,7 @@
 \end{equation}
 其中，$\alpha$ 对应于配置参数 \texttt{pos\_weight}。增大 $\alpha$ 会强化假阴性（false negatives）所对应的惩罚，因此通常会提升召回率（recall），但也可能以牺牲特异度（specificity）为代价。
 
-\subsubsection{阈值化决策规则}
+\subsubsection{Thresholded Decision Rule}
 
 尽管训练过程直接作用于对数几率，最终类别预测仍然通过对阳性类别概率进行阈值化（thresholding）获得。记 $\tau \in [0,1]$ 为决策阈值（decision threshold），则预测标签定义为
 \begin{equation}
@@ -117,10 +102,10 @@
 
 这一显式阈值机制在医学分类中尤为重要，因为偏向高敏感性（sensitivity-oriented）还是偏向高特异性（specificity-oriented）的操作平衡，往往无法事先固定。通过将 $\tau$ 作为训练报告与评估过程中的可配置参数，框架能够在不改变已学习模型的前提下，支持后续阈值分析（threshold analysis）。
 
-\subsection{优化过程与训练引擎}
+\subsection{Optimization and Training Engine}
 \label{subsec:optimization_training}
 
-\subsubsection{优化器与混合精度训练}
+\subsubsection{Optimizer and Mixed-Precision Training}
 
 我们使用 AdamW（带解耦权重衰减的 Adam）作为网络优化器，这是深度视觉模型中被广泛采用的一类优化方法：
 \begin{equation}
@@ -130,7 +115,7 @@
 
 当执行设备支持 CUDA 且开启 AMP 时，前向计算将在自动混合精度环境下执行，同时利用梯度缩放（gradient scaling）来稳定反向传播。这一机制能够提升计算效率，同时不改变优化问题在语义层面的定义。从方法论角度看，AMP 并不是一种新的学习规则；它是实现层面的加速策略，在保持目标函数不变的同时，只改变了部分操作的数值精度。
 
-\subsubsection{梯度裁剪与检查点机制}
+\subsubsection{Gradient Clipping and Checkpointing}
 
 为了提升优化稳定性，尤其是在使用较大学习率或高度不平衡监督信号时，我们可选地采用按全局范数（global norm）进行梯度裁剪。设 $g$ 表示所有可训练参数梯度拼接而成的向量，$\gamma > 0$ 表示裁剪阈值，则梯度裁剪可写为
 \begin{equation}
@@ -138,86 +123,3 @@
 \end{equation}
 
 我们还会保存包含模型状态、优化器状态、调度器状态（若存在）、训练器配置，以及聚合训练指标在内的检查点。这一设计使得框架能够更稳健地支撑长时间实验，并允许评估过程从原始训练过程解耦出来。特别地，\texttt{eval} 流水线模式可以加载先前保存的检查点，并在不重新拟合模型的情况下独立执行验证。
-
-\subsection{评估引擎与评价指标}
-\label{subsec:evaluation_engine}
-
-评估组件在不进行梯度更新的条件下处理验证批次，并在整个数据集范围内累积对数几率与标签，从而在用户指定阈值下计算一组二分类指标。设 $\mathrm{TP}$、$\mathrm{TN}$、$\mathrm{FP}$ 与 $\mathrm{FN}$ 分别表示标准混淆矩阵（confusion matrix）中的真正例、真反例、假正例与假反例，则报告的指标包括：
-\begin{equation}
-    \mathrm{Accuracy} = \frac{\mathrm{TP} + \mathrm{TN}}{\mathrm{TP} + \mathrm{TN} + \mathrm{FP} + \mathrm{FN}},
-\end{equation}
-\begin{equation}
-    \mathrm{Precision} = \frac{\mathrm{TP}}{\mathrm{TP} + \mathrm{FP}},
-\end{equation}
-\begin{equation}
-    \mathrm{Recall} = \frac{\mathrm{TP}}{\mathrm{TP} + \mathrm{FN}},
-\end{equation}
-\begin{equation}
-    \mathrm{Specificity} = \frac{\mathrm{TN}}{\mathrm{TN} + \mathrm{FP}},
-\end{equation}
-\begin{equation}
-    \mathrm{F1} = \frac{2 \cdot \mathrm{Precision} \cdot \mathrm{Recall}}{\mathrm{Precision} + \mathrm{Recall}},
-\end{equation}
-\begin{equation}
-    \mathrm{Balanced\ Accuracy} = \frac{\mathrm{Recall} + \mathrm{Specificity}}{2}.
-\end{equation}
-
-此外，我们还基于预测分数计算 ROC-AUC（Area Under the Receiver Operating Characteristic Curve）。相比于只报告准确率（accuracy），这一指标集合更适合不平衡医学分类任务，因为它能够同时揭示对阳性样本的敏感性、对误报的抑制能力，以及独立于阈值的排序质量。
-
-除了聚合评估之外，框架还支持批量预测（batch prediction），返回对数几率、概率、阈值化预测、标签、患者标识符以及原始图像块路径。这样的富预测对象（richer prediction object）对于后续误差分析（error analysis）、病例追踪（case tracing）以及未来可能开展的患者级聚合（patient-level aggregation）都很有价值。
-
-\subsection{框架设计与模块化}
-\label{subsec:framework_design}
-
-\subsubsection{配置驱动系统}
-
-我们框架的一个核心设计选择，是将几乎所有实验自由度都上升为具类型约束的配置对象（typed configuration objects）。顶层应用配置包含数据、模型、训练器、评估器、随机种子与日志系统的独立子配置。这些配置由 Python 的 \texttt{dataclass} 对象表示，并可通过统一解析器从 JSON 文件反序列化。默认配置还可以与用户覆盖配置进行合并，从而在不修改源代码的前提下实现干净的实验特化（experiment specialization）。
-
-形式化地，记 $\mathcal{C}$ 为框架的配置空间（configuration space），则一个具体实验由其中的某个元素决定：
-\begin{equation}
-    c \in \mathcal{C}, \qquad
-    c = \big(c_{\mathrm{data}}, c_{\mathrm{model}}, c_{\mathrm{trainer}}, c_{\mathrm{eval}}, c_{\mathrm{seed}}, c_{\mathrm{log}}\big).
-\end{equation}
-因此，整个流水线可以被视为一个从配置对象到实验执行轨迹与结果包的确定性或近确定性映射：
-\begin{equation}
-    \Pi: \mathcal{C} \rightarrow \mathcal{R},
-\end{equation}
-其中，$\Pi$ 表示流水线算子（pipeline operator），$\mathcal{R}$ 表示实验输出空间，包括检查点、训练历史、评估摘要以及可序列化到控制台的结果。
-
-这一抽象很重要，因为它将\emph{科学意图（scientific intent）}与\emph{实现仪式（implementation ceremony）}分离开来。我们并不是将超参数和执行选项散落在整个代码库中，而是将它们收拢到少数几个可检查、可序列化的对象中。这使得消融实验（ablation studies）、重复实验（replication）以及受控比较（controlled comparisons）显著更容易开展。
-
-\subsubsection{关注点分离}
-
-整个框架被组织为若干职责互不重叠的层次：
-\begin{itemize}
-    \item \textbf{数据模块（data module）}负责发现样本记录、执行患者级划分（patient-wise splitting）、构建变换、准备可选的 LMDB 缓存，并实例化数据加载器（data loaders）；
-    \item \textbf{模型模块（model module）}负责构造主干网络与分类头；
-    \item \textbf{训练引擎（training engine）}负责优化、梯度传播、检查点保存以及 epoch 级聚合；
-    \item \textbf{评估引擎（evaluation engine）}负责验证、预测与指标计算；
-    \item \textbf{应用层流水线（application pipeline）}负责整体执行顺序的编排；
-    \item \textbf{命令行入口（CLI entrypoint）}仅负责解析命令行参数并完成运行时启动。
-\end{itemize}
-这种分层保证了训练、验证、推理与配置解析彼此解耦，而这也正是本项目最初的设计目标之一。:contentReference[oaicite:24]{index=24}
-
-这一设计带来的一个重要结果是：对象生命周期（object lifecycle）由在语义上真正拥有它的模块控制。例如，训练引擎拥有优化器、损失函数、梯度缩放器与检查点逻辑；评估引擎拥有阈值化预测与数据集级聚合；流水线拥有这些组件被实例化与连接的顺序控制。这样的严格所有权分配（disciplined ownership）减少了隐藏耦合，也使整个代码库无论从实验视角还是从体系结构视角都更容易被理解。
-
-\subsubsection{单向执行流}
-
-从高层看，系统执行图遵循如下单向流程：
-\begin{equation}
-    \texttt{Config}
-    \rightarrow \texttt{Seed/Logging Initialization}
-    \rightarrow \texttt{Data Module Construction}
-    \rightarrow \texttt{Model Construction}
-    \rightarrow \texttt{Training and/or Evaluation}
-    \rightarrow \texttt{Checkpoint and Metrics Output}.
-\end{equation}
-
-这种单向结构并不仅仅是审美上的简洁。它能够最小化副作用（side effects）、局部化失败（localize failures），并确保实验状态以受控顺序被引入。实际上，这意味着用户可以在共享同一概念契约（conceptual contract）的前提下，以 \texttt{train}、\texttt{eval} 或 \texttt{train\_eval} 模式运行同一条流水线，同时仍然保持模型拟合与结果测量之间的分离。
-
-\subsection{设计动机讨论}
-\label{subsec:design_rationale}
-
-本节的方法学信息可以概括如下。在模型层面，我们采用了一个刻意保持强基线（strong baseline）与可解释性（interpretability）的方案：以 ResNet 家族视觉编码器（visual encoder）为主干，配合轻量级二分类头，并在数值稳定的逻辑目标（logistic objective）下进行端到端训练。在系统层面，我们将该模型嵌入一个把可复现性（reproducibility）、模块化（modularity）与协议纪律（protocol discipline）视为一等方法学关切（first-class methodological concerns）的框架之中，而不是把它们当成事后补充。
-
-这种双重强调对于计算病理（computational pathology）尤其重要。一个模型即便看起来很复杂，如果它的训练与评估过程难以复现、容易泄漏，或者与临时拼接的执行代码紧密耦合，那么它在科学上仍然可能是脆弱的。反过来说，即便主干网络本身相对标准，只要它被部署在一个定义严谨的实验框架中，并且在可信的患者级协议下被分析，它仍然能够支撑有意义的科学贡献。从这个意义上说，本文提出的方法不仅仅是一个分类器；它更是一个用于在现实约束下研究 IDC 图像块分类问题的结构化实验仪器（structured experimental instrument）。
