@@ -35,42 +35,6 @@
 \end{equation}
 其中，$\theta$ 表示全部可学习参数，$f_{\theta}(x)$ 给出输入图像块为阳性的预测概率。
 
-\subsection{Patient-Grouped Data Distribution}
-
-本文任务与普通 patch 分类任务的一个本质区别，在于数据不是从一个简单的样本池中无结构抽取，而是由患者级（patient-level）群组生成。更具体地，设第 $p$ 个患者对应的样本子集为
-\begin{equation}
-    \mathcal{D}_{p} = \{(x_i,y_i,p_i) \in \mathcal{D} : p_i = p\}, \quad p \in \mathcal{P}.
-\end{equation}
-于是，整个数据集可以写成患者子集的并：
-\begin{equation}
-    \mathcal{D} = \bigcup_{p \in \mathcal{P}} \mathcal{D}_{p},
-    \qquad
-    \mathcal{D}_{p} \cap \mathcal{D}_{q} = \varnothing \;\; \text{for } p \neq q.
-\end{equation}
-
-这一表示揭示了后续实验协议中的核心约束：虽然样本级标签定义在单个 patch 上，但统计相关性却发生在患者层面。同一患者内部的不同 patch 往往共享组织学背景、染色风格、切片制备过程与扫描条件，因此它们之间存在显著相关性。如果训练集与验证集在 patch 级随机划分，那么就可能存在
-\begin{equation}
-    \exists p \in \mathcal{P}, \quad
-    \mathcal{D}_{p} \cap \mathcal{D}_{\mathrm{train}} \neq \varnothing,
-    \qquad
-    \mathcal{D}_{p} \cap \mathcal{D}_{\mathrm{val}} \neq \varnothing,
-\end{equation}
-这意味着同一患者的不同 patch 同时出现在训练与验证阶段。此时，模型在验证时面对的并不是“真正新的患者分布”，而是与训练样本共享大量低层视觉统计的相关样本，从而产生乐观偏差（optimistic bias）。
-
-因此，我们将训练/验证划分形式化为患者集合上的划分，而非 patch 集合上的划分。设
-\begin{equation}
-    \mathcal{P}_{\mathrm{train}} \cup \mathcal{P}_{\mathrm{val}} = \mathcal{P},
-    \qquad
-    \mathcal{P}_{\mathrm{train}} \cap \mathcal{P}_{\mathrm{val}} = \varnothing,
-\end{equation}
-则对应的数据子集定义为
-\begin{equation}
-    \mathcal{D}_{\mathrm{train}} = \bigcup_{p \in \mathcal{P}_{\mathrm{train}}} \mathcal{D}_{p},
-    \qquad
-    \mathcal{D}_{\mathrm{val}} = \bigcup_{p \in \mathcal{P}_{\mathrm{val}}} \mathcal{D}_{p}.
-\end{equation}
-这一 group-aware splitting（组感知划分）策略保证了患者级隔离（patient-level separation），也使得后续评估更接近模型在未见患者上的真实泛化行为。
-
 \subsection{Parametric Search Under Imbalance and Thresholded Decision}
 
 在形式化层面，本文并不预先限定 $f_{\theta}$ 必须由何种具体网络结构实例化，而是将其视为一个由参数空间 $\Theta$ 索引的假设族（hypothesis class）
@@ -118,13 +82,45 @@
 \end{equation}
 进行联合选择。后续实验中比较不同损失加权方案与阈值设定，本质上都是在这一统一问题表述下，对不同代价结构与决策偏好的系统考察。
 
+\subsection{Patient-Grouped Data Distribution}
+
+本文任务与普通 patch 分类任务的一个本质区别，在于数据不是从一个简单的样本池中无结构抽取，而是由患者级（patient-level）群组生成。更具体地，设第 $p$ 个患者对应的样本子集为
+\begin{equation}
+    \mathcal{D}_{p} = \{(x_i,y_i,p_i) \in \mathcal{D} : p_i = p\}, \quad p \in \mathcal{P}.
+\end{equation}
+于是，整个数据集可以写成患者子集的并：
+\begin{equation}
+    \mathcal{D} = \bigcup_{p \in \mathcal{P}} \mathcal{D}_{p},
+    \qquad
+    \mathcal{D}_{p} \cap \mathcal{D}_{q} = \varnothing \;\; \text{for } p \neq q.
+\end{equation}
+
+这一表示揭示了后续实验协议中的核心约束：虽然样本级标签定义在单个 patch 上，但统计相关性却发生在患者层面。同一患者内部的不同 patch 往往共享组织学背景、染色风格、切片制备过程与扫描条件，因此它们之间存在显著相关性。如果训练集与验证集在 patch 级随机划分，那么就可能存在
+\begin{equation}
+    \exists p \in \mathcal{P}, \quad
+    \mathcal{D}_{p} \cap \mathcal{D}_{\mathrm{train}} \neq \varnothing,
+    \qquad
+    \mathcal{D}_{p} \cap \mathcal{D}_{\mathrm{val}} \neq \varnothing,
+\end{equation}
+这意味着同一患者的不同 patch 同时出现在训练与验证阶段。此时，模型在验证时面对的并不是“真正新的患者分布”，而是与训练样本共享大量低层视觉统计的相关样本，从而产生乐观偏差（optimistic bias）。
+
+因此，我们将训练/验证划分形式化为患者集合上的划分，而非 patch 集合上的划分。设
+\begin{equation}
+    \mathcal{P}_{\mathrm{train}} \cup \mathcal{P}_{\mathrm{val}} = \mathcal{P},
+    \qquad
+    \mathcal{P}_{\mathrm{train}} \cap \mathcal{P}_{\mathrm{val}} = \varnothing,
+\end{equation}
+则对应的数据子集定义为
+\begin{equation}
+    \mathcal{D}_{\mathrm{train}} = \bigcup_{p \in \mathcal{P}_{\mathrm{train}}} \mathcal{D}_{p},
+    \qquad
+    \mathcal{D}_{\mathrm{val}} = \bigcup_{p \in \mathcal{P}_{\mathrm{val}}} \mathcal{D}_{p}.
+\end{equation}
+这一 group-aware splitting（组感知划分）策略保证了患者级隔离（patient-level separation），也使得后续评估更接近模型在未见患者上的真实泛化行为。
+
 \subsection{Generalization Setting and Modeling Limits}
 
-基于以上定义，本文研究的核心问题可以概括为：在患者级隔离约束下，给定训练子集 $\mathcal{D}_{\mathrm{train}}$，学习参数 $\theta$ 并选择决策阈值 $\tau$，使所得判别器在经验风险意义下拟合训练数据，同时在未见患者构成的验证子集 $\mathcal{D}_{\mathrm{val}}$ 上保持稳定性能。形式上，我们关心的不是
-\begin{equation}
-    (x,y,p) \sim \mathcal{D}_{\mathrm{train}},
-\end{equation}
-上的记忆能力本身，而是当
+基于以上定义，本文研究的核心问题可以概括为：在患者级隔离约束下，给定训练子集 $\mathcal{D}_{\mathrm{train}}$，学习参数 $\theta$ 并选择决策阈值 $\tau$，使所得判别器在经验风险意义下拟合训练数据，同时在未见患者构成的验证子集 $\mathcal{D}_{\mathrm{val}}$ 上保持稳定性能。形式上，我们关心的是当
 \begin{equation}
     (x,y,p) \sim \mathcal{D}_{\mathrm{val}}
     \quad \text{with} \quad
