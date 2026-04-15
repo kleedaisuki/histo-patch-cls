@@ -1,0 +1,43 @@
+﻿% !TeX program = xelatex
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{siunitx}
+\usepackage{hyperref}
+\usepackage[nameinlink,noabbrev]{cleveref}
+\usepackage{enumitem}
+\usepackage{setspace}
+
+% Fonts
+\setmainfont{Times New Roman}
+\setsansfont{Arial}
+\setmonofont{Consolas}
+\setCJKmainfont{SimSun}
+\setCJKsansfont{Microsoft YaHei}
+\setCJKmonofont{SimSun}
+
+% Hyperref
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  citecolor=black,
+  urlcolor=blue,
+  pdftitle={IDC Patch Classification},
+  pdfauthor={Anonymous}
+}
+
+% Layout and style
+\setstretch{1.15}
+\setlength{\parskip}{0.4em}
+\setlength{\parindent}{2em}
+\setlist[itemize]{leftmargin=1.5em}
+\setlist[enumerate]{leftmargin=1.8em}
+
+% Common macros
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\TODO}[1]{\textbf{[TODO: #1]}}
