@@ -1,1 +1,181 @@
-﻿% TODO
+﻿\section{Dataset and Experimental Protocol}
+\label{sec:dataset_protocol}
+
+在医学图像学习中，数据集本身从来不是一组中性的输入文件，而是决定模型结论是否可信的实验基础设施。对于 IDC 图像块分类任务尤其如此：一方面，该任务具有明确的临床背景与视觉判别价值；另一方面，数据的患者级组织结构、类别不平衡、局部标注噪声以及高重复实验所需的工程开销，又使得一个看似简单的二分类问题很容易因为协议松散而产生被高估的结果。因此，本节不将数据集、预处理、划分方式与实现细节视为彼此独立的琐碎组件，而是将其作为一个统一的实验协议（experimental protocol）来描述。这样的写法有两个目的：第一，明确本文所有结果建立在何种数据生成与评估约束之上；第二，说明我们如何通过配置驱动（configuration-driven）、患者级隔离（patient-level separation）与模块化实现，尽可能减少实验中的非必要自由度与隐性泄漏路径。
+
+\subsection{IDC Breast Histopathology Dataset}
+
+本文采用 Kaggle 公开的 Breast Histopathology Images 数据集作为实验对象。该数据集来源于乳腺癌组织病理切片中裁剪得到的局部图像块，每个样本对应一个固定尺寸的 RGB patch 以及一个二元标签，用于表示该局部区域中是否包含浸润性导管癌（invasive ductal carcinoma, IDC）。形式上，单个样本记为
+\begin{equation}
+(x_i, y_i, p_i),
+\end{equation}
+其中，$x_i \in \mathbb{R}^{50 \times 50 \times 3}$ 为第 $i$ 个图像块，$y_i \in \{0,1\}$ 为二分类标签，$p_i$ 为对应患者标识。标签语义定义为
+\begin{equation}
+y_i =
+\begin{cases}
+1, & \text{if patch } x_i \text{ contains IDC tissue,}\\
+0, & \text{otherwise.}
+\end{cases}
+\end{equation}
+
+与一般自然图像分类数据集不同，该数据集并非由语义上彼此独立的大尺寸图像组成，而是由病理切片中裁剪出来的大量微观局部区域构成。这意味着模型需要识别的是腺体结构、细胞排列、染色纹理与肿瘤侵袭模式等细粒度组织学模式，而不是大尺度场景语义。也正因为如此，端到端深度学习模型在该任务上的优势，不仅体现为从像素中自动学习判别特征，更体现为能够在统一优化目标下耦合低层纹理表示与高层病理判别边界。
+
+从数据统计上看，该数据集规模约为 $2.7 \times 10^5$ 个图像块，且阳性样本比例明显低于阴性样本，表现出典型的类别不平衡（class imbalance）特征。设总样本数为 $N$，阳性样本集合为
+\begin{equation}
+\mathcal{D}^{+} = \{(x_i,y_i,p_i) \in \mathcal{D} : y_i = 1\},
+\end{equation}
+阴性样本集合为
+\begin{equation}
+\mathcal{D}^{-} = \{(x_i,y_i,p_i) \in \mathcal{D} : y_i = 0\},
+\end{equation}
+则通常有
+\begin{equation}
+|\mathcal{D}^{+}| \ll |\mathcal{D}^{-}|.
+\end{equation}
+这一性质意味着，若仅依赖总体准确率（accuracy）评价模型，则很容易高估其临床可用性。因此，后续实验中我们更加重视 F1-score、平衡准确率（Balanced Accuracy）与 ROC-AUC 等对不平衡数据更稳健的指标。
+
+除了类别分布不均衡之外，数据还具有显式患者级层次结构。样本在磁盘中按 patient 目录组织，同一患者目录下再按标签子目录存放图像块。这一组织方式并不只是文件系统层面的便利，它直接揭示了数据的生成机制：不同图像块之间并非天然独立，而是共享患者特异的组织背景、切片制备流程、染色偏差与扫描条件。正因如此，本文将患者标识视为实验协议中的一等约束变量，而不是可被忽略的附加元数据。
+
+\subsection{Patient-Wise Split as the Primary Evaluation Constraint}
+
+对于本任务，最关键的实验设计问题不是“采用哪种卷积骨干网络”，而是“模型究竟在什么样的数据隔离条件下被评估”。设患者集合为 $\mathcal{P}$，第 $p$ 个患者对应的样本子集为
+\begin{equation}
+\mathcal{D}_{p} = \{(x_i,y_i,p_i) \in \mathcal{D} : p_i = p\}.
+\end{equation}
+若采用 patch-level random split，即直接在样本级别对 $\mathcal{D}$ 进行随机划分，则训练集与验证集可能同时包含来自同一患者的不同图像块。形式上，可能出现
+\begin{equation}
+\exists p \in \mathcal{P}, \quad
+\mathcal{D}_{p} \cap \mathcal{D}_{\mathrm{train}} \neq \varnothing,
+\qquad
+\mathcal{D}_{p} \cap \mathcal{D}_{\mathrm{val}} \neq \varnothing.
+\end{equation}
+在这种情况下，模型在验证阶段面对的样本虽然不是像素级重复，但仍可能与训练样本共享高度相似的患者级统计结构。由此得到的高性能，很难被解释为模型真正学到了可迁移的病理判别规律；更可能的情况是，模型部分利用了与患者身份相关的低层视觉偏差，从而造成性能估计的系统性乐观偏差（optimistic bias）。
+
+基于这一考虑，本文采用 patient-wise split 作为唯一正式评估协议。具体而言，我们首先在患者集合上进行随机打乱，再按照给定验证比例 $r_{\mathrm{val}} \in (0,1)$ 将患者划分为互不相交的两部分：
+\begin{equation}
+\mathcal{P}_{\mathrm{train}} \cup \mathcal{P}_{\mathrm{val}} = \mathcal{P},
+\qquad
+\mathcal{P}_{\mathrm{train}} \cap \mathcal{P}_{\mathrm{val}} = \varnothing.
+\end{equation}
+随后，将属于同一患者的全部 patch 整体分配给同一个数据子集：
+\begin{equation}
+\mathcal{D}_{\mathrm{train}} = \bigcup_{p \in \mathcal{P}_{\mathrm{train}}} \mathcal{D}_{p},
+\qquad
+\mathcal{D}_{\mathrm{val}} = \bigcup_{p \in \mathcal{P}_{\mathrm{val}}} \mathcal{D}_{p}.
+\end{equation}
+这样构造出的训练/验证划分满足严格的患者级隔离，从而使验证集更接近“未见患者上的泛化测试”而非“已见患者统计模式的再识别”。
+
+在实现层面，我们将这一过程封装为稳定、可复现的 group-aware splitting 过程：患者 ID 先被提取并排序，再由固定随机种子驱动的伪随机过程进行打乱与切分。设患者总数为 $|\mathcal{P}|$，则验证患者数量为
+\begin{equation}
+N_{\mathrm{val}} = \max\left(1,\, \min\left(|\mathcal{P}|-1,\, \mathrm{round}(|\mathcal{P}| \cdot r_{\mathrm{val}})\right)\right).
+\end{equation}
+这一实现细节看似平凡，却反映出一个重要原则：实验协议应当尽量避免“临时脚本式”的自由裁量，而应使用明确规则保证切分总能产生非空训练集与非空验证集，同时在多次运行中保持可追踪性与可复核性。
+
+\subsection{Data Discovery and Record Construction}
+
+为了使后续数据流单向且干净，我们首先将原始文件系统扫描过程显式化为样本记录构造（record construction）步骤。设数据根目录为 $R$，我们对其中所有图像文件执行递归发现（recursive discovery），并为每个合法图像路径构造记录
+\begin{equation}
+r_i = (\pi_i, y_i, p_i),
+\end{equation}
+其中，$\pi_i$ 为文件绝对路径，$y_i \in \{0,1\}$ 根据目录名解析得到，$p_i$ 为患者目录名。于是，原始文件系统中的非结构化对象被转换为统一的样本记录集合
+\begin{equation}
+\mathcal{R} = \{r_i\}_{i=1}^{N}.
+\end{equation}
+
+将“发现样本”独立为一个明确步骤具有两个好处。首先，它使样本总数、患者总数与类别分布可以在训练开始之前被显式记录和检查，从而防止实验在脏数据或目录组织异常的情况下静默运行。其次，它将数据文件与模型逻辑解耦：后续的数据集对象、采样器、缓存机制与 DataLoader 都建立在统一记录结构之上，而无需反复依赖文件系统语义进行二次解析。这种从文件到记录、再从记录到数据对象的单向映射，是整个实验管线整洁性的基础。
+
+\subsection{Preprocessing and Data Augmentation}
+
+在预处理方面，我们采用一套刻意保持克制的基础视觉变换，以建立可解释、可复现且具有足够代表性的基线。训练阶段的输入变换定义为
+\begin{equation}
+T_{\mathrm{train}} = T_{\mathrm{norm}} \circ T_{\mathrm{tensor}} \circ T_{\mathrm{flip}} \circ T_{\mathrm{resize}},
+\end{equation}
+其中，$T_{\mathrm{resize}}$ 将输入重采样到固定空间尺度，$T_{\mathrm{flip}}$ 表示随机水平翻转与随机垂直翻转，$T_{\mathrm{tensor}}$ 将 PIL 图像映射为张量表示，$T_{\mathrm{norm}}$ 则执行逐通道归一化。更具体地，若原始图像为 $x$，则归一化张量可写为
+\begin{equation}
+\tilde{x}_{u,v,c} = \frac{x_{u,v,c} - \mu_c}{\sigma_c},
+\end{equation}
+其中，$(u,v)$ 表示像素位置，$c \in \{1,2,3\}$ 表示颜色通道，$\mu_c$ 与 $\sigma_c$ 分别为第 $c$ 个通道的均值与标准差。本文默认采用对三个通道一致的简单统计量，以保持配置清晰并避免在基线阶段引入过多额外自由度。
+
+验证阶段我们采用更保守的确定性变换：
+\begin{equation}
+T_{\mathrm{val}} = T_{\mathrm{norm}} \circ T_{\mathrm{tensor}} \circ T_{\mathrm{resize}}.
+\end{equation}
+也就是说，验证与推理阶段不引入随机几何扰动，从而确保模型评估对应的是固定输入分布，而不是某种隐式测试时增强（test-time augmentation）策略。
+
+这里有必要说明我们为什么没有在基线阶段引入更复杂的 stain normalization（染色归一化）、Color Jitter、MixUp、CutMix 或组织病理专用增强策略。原因并非这些方法不重要，而是本文的主要目标首先是建立一个协议清晰、泄漏受控、复现友好的端到端基线框架。在这样一个框架中，基础几何增强已经足以对局部方向不变性提供有限支持，同时又不至于把后续实验解释混淆为“增强策略驱动的性能波动”。换言之，我们有意识地将数据增强控制在最小必要复杂度上，使模型比较更多反映协议与训练策略本身，而不是由增强设计掩盖。
+
+\subsection{Mini-Batch Construction and Imbalance Handling}
+
+在患者级划分之后，训练仍需面对明显的类别不平衡。为此，我们在 mini-batch 构造层与损失函数层分别保留了两类互补机制。
+
+首先，在采样层面，我们支持加权随机采样（Weighted Random Sampling）。设训练集中的类别计数为
+\begin{equation}
+N_{0} = |\{(x_i,y_i,p_i) \in \mathcal{D}_{\mathrm{train}} : y_i = 0\}|,
+\qquad
+N_{1} = |\{(x_i,y_i,p_i) \in \mathcal{D}_{\mathrm{train}} : y_i = 1\}|.
+\end{equation}
+对于标签为 $y_i$ 的样本，其采样权重定义为
+\begin{equation}
+w_i = \frac{1}{N_{y_i}}.
+\end{equation}
+由此构造的采样分布会相对提高少数类样本在 mini-batch 中被抽到的概率，使训练过程看到更平衡的局部标签分布。这一策略改变的是优化过程接触样本的频率结构，而不是单个样本的损失形式。
+
+其次，在目标函数层面，我们允许使用正类权重 $\omega_{+}$ 调整带 logits 的二元交叉熵。该机制已在第~\ref{sec:problem_formulation} 节给出形式化定义，它改变的是损失面中不同类别误差的相对代价，而非采样频率本身。将这两条路径同时保留，具有重要的方法学意义：它允许我们在统一协议下比较“改变数据分布曝光频率”与“改变目标函数代价结构”两类不平衡处理策略的差异，而无需修改模型主体结构。
+
+对于 mini-batch 本身，我们采用统一的批次结构（batch schema）封装图像张量、标签张量、患者 ID 序列与样本路径序列。设批大小为 $B$，则一个训练批次可表示为
+\begin{equation}
+\mathcal{B} = (\mathbf{X}, \mathbf{y}, \mathbf{p}, \mathbf{\Pi}),
+\end{equation}
+其中，$\mathbf{X} \in \mathbb{R}^{B \times C \times H \times W}$ 为图像张量，$\mathbf{y} \in \{0,1\}^{B}$ 为标签向量，$\mathbf{p}$ 为患者 ID 元组，$\mathbf{\Pi}$ 为路径元组。把患者 ID 与路径一起保留在批次结构中，不仅有利于调试和错误分析，也为未来开展 patient-level aggregation（患者级聚合）与 failure case analysis（失败案例分析）提供了直接接口。
+
+\subsection{LMDB-Based Data Caching and I/O Stabilization}
+
+在大规模 patch 训练中，数据读取往往不是一个无足轻重的底层细节。对于包含数十万小图像的组织病理数据集，频繁的文件系统随机读取会带来显著的 I/O 抖动，进而影响实验速度、GPU 利用率以及重复运行时的稳定性。因此，我们在数据层引入基于 LMDB（Lightning Memory-Mapped Database）的缓存机制，将原始图像字节写入单一键值存储中，以减少训练时的碎片化文件访问。
+
+形式上，设样本记录集合为 $\mathcal{R} = \{r_i\}_{i=1}^{N}$，其中每个记录包含路径 $\pi_i$。我们定义 LMDB 键值映射
+\begin{equation}
+\kappa : \pi_i \mapsto b_i,
+\end{equation}
+其中，$b_i$ 表示图像文件的原始字节流。缓存建立完成后，数据集读取流程不再直接依赖文件系统路径，而是优先通过键 $\kappa(\pi_i)$ 在 LMDB 环境中查找对应字节，并在内存中完成图像解码与后续变换。若缓存缺失，则退回文件系统读取作为保底路径。
+
+更重要的是，我们并未将 LMDB 仅仅当作一次性加速技巧，而是为其加入了基于数据指纹（fingerprint）的可复用性判断机制。设记录集合指纹函数为
+\begin{equation}
+F(\mathcal{R}) = \mathrm{SHA256}\bigl(\{(\pi_i, s_i, t_i)\}_{i=1}^{N}\bigr),
+\end{equation}
+其中，$s_i$ 表示文件大小，$t_i$ 表示最后修改时间戳。只有当记录数量、缓存路径、LMDB 配置与指纹均匹配时，我们才复用已存在缓存；否则重新构建。这个设计意味着缓存不再是一个可能悄悄过期的黑盒，而是成为实验协议的一部分：它既提供性能收益，也保持语义正确性与运行可解释性。
+
+我们强调，将缓存机制写入论文并不是为了夸大工程实现，而是因为它与 reproducibility（可复现性）存在直接关系。一个训练过程若高度依赖未记录的临时缓存状态，那么其运行时表现和数据访问时序就可能在不同机器、不同阶段甚至同一机器的不同时刻之间发生难以解释的漂移。将缓存构造规则显式化，恰恰是在减少这类隐性变量。
+
+\subsection{Configuration-Driven Experiment Management}
+
+为了使实验设置与实现逻辑解耦，我们采用 dataclass 与 JSON 配置文件共同构成配置驱动（configuration-driven）的实验管理方案。形式上，整个应用配置可表示为一个顶层对象
+\begin{equation}
+\mathcal{C} = (\mathcal{C}_{\mathrm{data}}, \mathcal{C}_{\mathrm{model}}, \mathcal{C}_{\mathrm{train}}, \mathcal{C}_{\mathrm{eval}}, \mathcal{C}_{\mathrm{seed}}, \mathcal{C}_{\mathrm{log}}),
+\end{equation}
+其中，$\mathcal{C}_{\mathrm{data}}$ 包含数据根目录、图像预处理、划分方式、DataLoader 参数与 LMDB 设置；$\mathcal{C}_{\mathrm{model}}$ 定义主干名称、隐藏层维度、Dropout、是否使用预训练与是否冻结主干；$\mathcal{C}_{\mathrm{train}}$ 包含训练轮数、学习率、权重衰减、阈值、AMP、梯度裁剪、正类权重与 checkpoint 目录；$\mathcal{C}_{\mathrm{eval}}$ 控制验证阶段设备与阈值；$\mathcal{C}_{\mathrm{seed}}$ 与 $\mathcal{C}_{\mathrm{log}}$ 分别负责随机性管理与日志路由。
+
+配置解析过程采用“默认配置 + 覆盖配置”的深度合并（deep merge）策略。设默认配置为 $\mathcal{C}^{(0)}$，用户覆盖配置为 $\Delta \mathcal{C}$，则生效配置可表示为
+\begin{equation}
+\mathcal{C}^{\star} = \mathrm{Merge}(\mathcal{C}^{(0)}, \Delta \mathcal{C}).
+\end{equation}
+这种设计保证了两点：第一，实验的基础语义总是由一个完整、可检查的默认配置定义，不依赖外部脚本隐式补参；第二，用户可以仅修改与当前实验相关的局部字段，而不必复制整份配置文件，从而降低配置漂移与人为错误概率。
+
+在论文视角下，配置驱动的重要性不在于“代码优雅”，而在于它将实验选择从不可见的命令式状态中剥离出来，转化为可以被序列化、比较、追踪和回放的显式对象。这使得我们能够把“具体实验做了什么”回答为一个精确配置，而不是一段模糊口述。
+
+\subsection{Reproducibility Controls: Seeds, Logging, and Checkpoints}
+
+严格的实验协议不仅要求数据划分合理，也要求重复运行时的随机性来源尽可能受控。为此，我们使用统一的随机种子配置控制 Python、NumPy、PyTorch 以及 CUDA 相关随机过程。设主随机种子为 $s \in \mathbb{N}$，则实验初始化时执行如下种子传播：
+\begin{equation}
+s_{\mathrm{python}} = s_{\mathrm{numpy}} = s_{\mathrm{torch}} = s,
+\end{equation}
+并在 CUDA 可用时进一步设置对应设备端随机状态。对于 DataLoader worker，我们根据 PyTorch 提供的初始种子派生每个 worker 的 NumPy 与 Python 随机状态，使多进程数据加载仍与主种子体系兼容。
+
+此外，我们显式暴露 deterministic algorithms（确定性算法）与 cuDNN benchmark 两项开关，以便在“严格可复现性”与“运行效率”之间进行受控权衡。我们并不把所有实验都机械地锁定为绝对确定性，因为某些后端优化可能与确定性要求冲突；但重要的是，这种权衡必须被记录在配置中，而不是隐式发生。
+
+日志系统方面，我们采用统一 logger 工厂生成模块级日志对象，并通过全局配置控制不同日志级别的输出目标。训练过程中的关键事件——如样本发现、患者划分、缓存命中或重建、模型初始化、每若干步训练损失、checkpoint 保存与最终评估结果——都会以一致格式写入控制台或文件。日志在这里不是“调试附属品”，而是实验运行轨迹（execution trace）的文本化表示。对于复杂实验系统而言，没有被记录的状态变化，往往就等于没有被真正管理。
+
+在模型状态管理方面，我们使用 checkpoint 保存训练轮次、模型参数、优化器状态、学习率调度器状态、训练配置以及对应的训练指标。形式上，一个 checkpoint 可视为如下元组：
+\begin{equation}
+\Gamma_t = (t, \theta_t, \Omega_t, \Lambda_t, \mathcal{C}_{\mathrm{train}}, M_t),
+\end{equation}
+其中，$t$ 表示 epoch 编号，$\theta_t$ 为模型参数，$\Omega_t$ 为优化器状态，$\Lambda_t$ 为调度器状态，$M_t$ 为当轮训练指标。这样的保存方式不仅支持中断恢复，也使得“某个结果对应哪个具体模型状态”具有明确可追溯性。
