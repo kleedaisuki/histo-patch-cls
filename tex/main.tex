@@ -9,7 +9,11 @@
 \maketitle
 
 \begin{abstract}
-    ccc
+    浸润性导管癌（invasive ductal carcinoma, IDC）图像块分类是数字病理（digital pathology）中的经典二分类任务，也是更大尺度乳腺组织病理分析流程的重要基础环节。然而，公开 IDC patch 数据通常按患者（patient）组织，同一患者内部的图像块在组织结构、染色风格与扫描条件上具有显著相关性；若直接采用 patch 级随机划分（patch-wise random split），容易造成信息泄漏（data leakage）并系统性高估模型泛化能力。针对这一方法学风险，本文围绕 Kaggle Breast Histopathology Images 数据集，构建了一个面向 IDC patch classification 的、以 patient-wise 评估协议为核心的可复现实验框架。
+
+    在方法上，我们以端到端深度学习（end-to-end deep learning）为主线，采用可切换的深度残差网络（Residual Network, ResNet）作为主干网络，并配合轻量分类头完成二分类建模。本文从优化景观（optimization landscape）的角度讨论 ResNet 残差参数化对深层训练稳定性的意义，并在统一目标函数下组织主干与分类头的联合优化（joint optimization）。在系统实现上，框架以配置驱动（configuration-driven）方式管理数据、模型、训练、评估、随机种子、日志与检查点，将数据发现、患者划分、LMDB 缓存、训练与验证流程显式解耦，从而形成单向、可追踪且可扩展的数据流。
+
+    与将重点放在额外结构复杂化的工作不同，本文强调：在 IDC patch classification 这类容易被实验协议误导的医学视觉任务中，可信结论首先依赖严格的数据边界与透明的工程控制。基于这一立场，本文为 patient-wise 设定下的预训练 ResNet 基线、类别不平衡处理策略以及阈值分析提供了统一而干净的实验起点，也为后续更复杂方法的比较、消融与扩展研究奠定了可复验的基础。
 \end{abstract}
 \newpage
 

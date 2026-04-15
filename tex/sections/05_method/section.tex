@@ -12,15 +12,62 @@
 \end{equation}
 其中，$g_{\phi}(\cdot)$ 表示由参数 $\phi$ 参数化的卷积主干网络，$d$ 表示全局池化（global pooling）之后、由主干结构决定的特征维度。
 
-本文之所以采用 ResNet，并不只是因为它是经验上常见的视觉骨干，更因为其残差参数化（residual parameterization）在优化景观（optimization landscape）层面提供了更稳定的训练几何。对于深层网络，若直接学习某一层的完整变换 $H(x)$，优化过程往往需要在高度非凸（non-convex）且条件数较差（ill-conditioned）的参数空间中同时协调恒等传递与增量修正。而 ResNet 通过将目标改写为
+在本文语境下，选择主干网络并不是孤立的架构偏好问题，而是端到端学习（end-to-end learning）中的优化风险控制问题。由于主干网络与分类头在统一损失之下被联合更新，前端特征提取器不再是静态编码器，而会持续受到来自二分类目标的反向传播信号牵引。对 IDC patch classification 而言，这种端到端耦合至少带来如下三类彼此关联的优化风险：
+\begin{itemize}
+    \item 深层复合映射（deep composition）本身容易造成梯度衰减、梯度爆炸以及训练退化（degradation），使主干越深、越难稳定地被任务信号有效塑形；
+    \item 病理图像监督信号往往同时包含类别不平衡（class imbalance）、边界样本模糊和局部标注噪声（label noise）等因素，这会使反向传播方向呈现更强的方差与局部不稳定性；
+    \item 若主干参数化过于脆弱，联合优化就容易把“学习更有判别力的表征”退化为“在崎岖损失面（rugged loss surface）上追逐短期梯度收益”，从而放大条件数恶化（ill-conditioning）与表征漂移（representation drift）问题。
+\end{itemize}
+
+正是在这一意义上，ResNet 的价值首先体现为一种面向优化风险的结构性回应，而不是经验上“好用”的默认骨干。对于普通深层网络，若第 $l$ 层直接学习完整映射 $H_{l}(x_{l})$，则全网络可写为
 \begin{equation}
-    H(x) = x + F(x),
+    x_{L} = H_{L-1} \circ H_{L-2} \circ \cdots \circ H_{0}(x_{0}),
 \end{equation}
-把困难问题重写为围绕恒等映射（identity mapping）的扰动学习（perturbation learning）。
+此时端到端训练必须在深层复合映射诱导的高度非凸（non-convex）参数空间中，同时学习信息保留、特征变换与判别适配。相比之下，ResNet 将每个残差块（residual block）重写为
+\begin{equation}
+    x_{l+1} = x_{l} + F_{l}(x_{l}; \phi_{l}), \qquad l = 0,1,\dots,L-1,
+\end{equation}
+即不直接学习完整变换，而是学习相对于恒等映射（identity mapping）的残差修正（residual correction）。于是深层表示满足
+\begin{equation}
+    x_{L} = x_{0} + \sum_{l=0}^{L-1} F_{l}(x_{l}; \phi_{l}),
+\end{equation}
+网络整体更接近一类“恒等主路径 + 渐进扰动”的受控系统（controlled perturbation system）。这种重参数化（reparameterization）并不降低模型表达能力，却显著改变了端到端训练所面对的优化地形：模型不必在每一层都重新学习“信息至少不要丢失”这一基本要求，而可以把参数自由度更多用于有监督的判别修正。
 
-这种重参数化（reparameterization）并不会改变模型的表达能力上界，却会显著改变梯度传播路径与局部曲率结构，使深层网络更容易沿着“接近恒等、逐步偏移”的方向被优化。换言之，残差连接（skip connection）把原本容易退化（degradation）的深层拟合问题，转化为一类更平滑、可达性更强的优化问题，这也是本文将其视为优化层面基座（optimization-oriented backbone）的原因。
+这一点可以从梯度传播形式看得更清楚。设损失函数为 $\mathcal{L}$，则从第 $L$ 层回传到第 $l$ 层的梯度为
+\begin{equation}
+    \frac{\partial \mathcal{L}}{\partial x_{l}}
+    =
+    \frac{\partial \mathcal{L}}{\partial x_{L}}
+    \prod_{k=l}^{L-1}
+    \left(
+        I + \frac{\partial F_{k}(x_{k}; \phi_{k})}{\partial x_{k}}
+    \right),
+\end{equation}
+其中 $I$ 为恒等矩阵（identity matrix）。与普通网络中的雅可比连乘（Jacobian product）
+\begin{equation}
+    \frac{\partial \mathcal{L}}{\partial x_{l}}
+    =
+    \frac{\partial \mathcal{L}}{\partial x_{L}}
+    \prod_{k=l}^{L-1}
+    \frac{\partial H_{k}(x_{k})}{\partial x_{k}}
+\end{equation}
+相比，残差网络的局部雅可比天然围绕 $I$ 展开。若记
+\begin{equation}
+    J_{k} = I + \frac{\partial F_{k}(x_{k}; \phi_{k})}{\partial x_{k}},
+\end{equation}
+则当 $\left\| \frac{\partial F_{k}}{\partial x_{k}} \right\|_{2}$ 不过大时，有
+\begin{equation}
+    1 - \left\| \frac{\partial F_{k}}{\partial x_{k}} \right\|_{2}
+    \le
+    \sigma_{\min}(J_{k})
+    \le
+    \sigma_{\max}(J_{k})
+    \le
+    1 + \left\| \frac{\partial F_{k}}{\partial x_{k}} \right\|_{2}.
+\end{equation}
+这意味着在端到端训练中，只要残差分支的局部扰动保持受控，梯度就更容易沿恒等主路径稳定穿透深层网络，而不必像普通深层复合映射那样更容易发生指数级放大或衰减（exploding or vanishing gradients）。从优化景观（optimization landscape）的角度看，这种参数化通常对应更温和的局部曲率（local curvature）、更可控的条件化（conditioning），以及更低的训练退化风险。
 
-对于组织病理图像而言，这一点尤其重要。IDC patch 的判别信息通常表现为局部纹理、腺体结构、染色差异与细胞排列等多尺度形态学线索（multi-scale morphological cues）的组合，而非单一、线性的低层特征。因此，我们希望主干网络既能保持较深层次的表征能力，又不因深度增加而显著恶化训练动力学（training dynamics）。ResNet 正适合承担这一角色：它允许网络在浅层统计模式之上逐层叠加残差修正，从而在保留稳定优化路径的同时，逐步形成更贴近病灶判别边界的特征表征。
+对于组织病理图像，这种风险控制意义尤其关键。IDC patch 的判别模式并不是单一尺度上的边缘或纹理，而是局部染色差异、细胞排列、腺体结构与组织微环境共同构成的多尺度形态学线索（multi-scale morphological cues）。端到端训练必须允许前端表征在监督信号驱动下持续重组，但又不能让这种重组演化为不稳定的深层漂移。ResNet 恰好在这两者之间提供了平衡：一方面，它保留了足够的深度与非线性，以逐层累积病灶敏感的表示；另一方面，它通过残差主路径降低联合优化对脆弱梯度链条的依赖，使“学习判别性表征”不会轻易退化为“优化过程本身先失稳”。因此，本文选择 ResNet，并不是将其视为某种中性的实现细节，而是将其视为在端到端学习框架下管理优化风险、维持训练可达性（trainability）与表示可塑性（representational plasticity）的结构性设计。
 
 在本文实现中，主干网络从 ResNet 家族中实例化，支持 ResNet-18、ResNet-34 与 ResNet-50。原始主干末端的全连接层（fully connected layer）被替换为恒等映射（identity mapping），从而使主干仅承担特征提取器（feature extractor）的角色。对于标准的 ImageNet 预训练结构，这一设计对应于 ResNet-18/34 的 $d=512$，以及 ResNet-50 的 $d=2048$。
 
