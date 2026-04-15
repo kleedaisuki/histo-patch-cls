@@ -1,1 +1,169 @@
-﻿% TODO
+﻿\section{Problem Formulation}
+\label{sec:problem_formulation}
+
+本节对 IDC 图像块分类任务给出形式化定义。我们的目标不是把一个经验上“能跑通”的工程流程松散地描述为若干实现细节，而是将其表述为一个具有清晰输入空间、监督信号、参数化模型、训练目标与决策规则的端到端学习（end-to-end learning）问题。这样的形式化有两层意义：其一，它将后续实验设计严格锚定到一个明确的数学对象上；其二，它使 patient-wise 数据划分、类别不平衡处理与阈值化决策不再只是工程技巧，而成为问题定义本身的一部分。
+
+\subsection{Task Definition and Notation}
+
+设输入图像块（patch）空间为
+\begin{equation}
+    \mathcal{X} \subseteq \mathbb{R}^{h \times w \times c},
+\end{equation}
+其中，$h$ 表示图像高度，$w$ 表示图像宽度，$c$ 表示通道数。在本文所使用的 IDC 数据集中，$h = w = 50$ 且 $c = 3$，因此每个样本都是一个 $50 \times 50$ 的 RGB 组织病理图像块。标签空间定义为
+\begin{equation}
+    \mathcal{Y} = \{0,1\},
+\end{equation}
+其中，$y=1$ 表示对应图像块中存在浸润性导管癌（invasive ductal carcinoma, IDC），$y=0$ 表示不存在 IDC。
+
+因此，一个监督样本可以写为
+\begin{equation}
+    (x,y) \in \mathcal{X} \times \mathcal{Y}.
+\end{equation}
+我们将整个数据集记为
+\begin{equation}
+    \mathcal{D} = \{(x_i, y_i, p_i)\}_{i=1}^{N},
+\end{equation}
+其中，$N$ 表示样本总数，$p_i \in \mathcal{P}$ 表示第 $i$ 个样本所属的患者标识（patient identity），$\mathcal{P}$ 为患者集合。与许多默认独立同分布（independent and identically distributed, i.i.d.）假设的数据集不同，这里的样本不仅带有类别标签，还带有显式的患者分组结构。该结构不是边缘元信息，而是决定训练/验证划分是否可信的关键约束。
+
+从概率建模角度看，我们的目标是学习一个条件伯努利分布（conditional Bernoulli distribution）
+\begin{equation}
+    Y \mid X=x \sim \mathrm{Bernoulli}(\eta(x)),
+\end{equation}
+其中，$\eta(x) = \mathbb{P}(Y=1 \mid X=x)$ 表示图像块 $x$ 属于 IDC 阳性类别的真实后验概率（posterior probability）。模型的任务是在有限训练样本上学习一个参数化近似
+\begin{equation}
+    f_{\theta}: \mathcal{X} \rightarrow [0,1],
+\end{equation}
+其中，$\theta$ 表示全部可学习参数，$f_{\theta}(x)$ 给出输入图像块为阳性的预测概率。
+
+\subsection{Patient-Grouped Data Distribution}
+
+本文任务与普通 patch 分类任务的一个本质区别，在于数据不是从一个简单的样本池中无结构抽取，而是由患者级（patient-level）群组生成。更具体地，设第 $p$ 个患者对应的样本子集为
+\begin{equation}
+    \mathcal{D}_{p} = \{(x_i,y_i,p_i) \in \mathcal{D} : p_i = p\}, \quad p \in \mathcal{P}.
+\end{equation}
+于是，整个数据集可以写成患者子集的并：
+\begin{equation}
+    \mathcal{D} = \bigcup_{p \in \mathcal{P}} \mathcal{D}_{p},
+    \qquad
+    \mathcal{D}_{p} \cap \mathcal{D}_{q} = \varnothing \;\; \text{for } p \neq q.
+\end{equation}
+
+这一表示揭示了后续实验协议中的核心约束：虽然样本级标签定义在单个 patch 上，但统计相关性却发生在患者层面。同一患者内部的不同 patch 往往共享组织学背景、染色风格、切片制备过程与扫描条件，因此它们之间存在显著相关性。如果训练集与验证集在 patch 级随机划分，那么就可能存在
+\begin{equation}
+    \exists p \in \mathcal{P}, \quad
+    \mathcal{D}_{p} \cap \mathcal{D}_{\mathrm{train}} \neq \varnothing,
+    \qquad
+    \mathcal{D}_{p} \cap \mathcal{D}_{\mathrm{val}} \neq \varnothing,
+\end{equation}
+这意味着同一患者的不同 patch 同时出现在训练与验证阶段。此时，模型在验证时面对的并不是“真正新的患者分布”，而是与训练样本共享大量低层视觉统计的相关样本，从而产生乐观偏差（optimistic bias）。
+
+因此，我们将训练/验证划分形式化为患者集合上的划分，而非 patch 集合上的划分。设
+\begin{equation}
+    \mathcal{P}_{\mathrm{train}} \cup \mathcal{P}_{\mathrm{val}} = \mathcal{P},
+    \qquad
+    \mathcal{P}_{\mathrm{train}} \cap \mathcal{P}_{\mathrm{val}} = \varnothing,
+\end{equation}
+则对应的数据子集定义为
+\begin{equation}
+    \mathcal{D}_{\mathrm{train}} = \bigcup_{p \in \mathcal{P}_{\mathrm{train}}} \mathcal{D}_{p},
+    \qquad
+    \mathcal{D}_{\mathrm{val}} = \bigcup_{p \in \mathcal{P}_{\mathrm{val}}} \mathcal{D}_{p}.
+\end{equation}
+这一 group-aware splitting（组感知划分）策略保证了患者级隔离（patient-level separation），也使得后续评估更接近模型在未见患者上的真实泛化行为。
+
+\subsection{End-to-End Parametric Model}
+
+我们采用端到端深度学习框架对映射 $f_{\theta}$ 进行参数化。令
+\begin{equation}
+    \phi_{\theta_b}: \mathcal{X} \rightarrow \mathbb{R}^{d}
+\end{equation}
+表示主干网络（backbone network），其中，$\theta_b$ 为主干参数，$d$ 为输出特征维度。本文中，$\phi_{\theta_b}$ 由卷积神经网络（convolutional neural network, CNN）实例化，并具体采用可切换的 ResNet 主干。给定输入图像块 $x$，主干网络首先输出特征表示
+\begin{equation}
+    \mathbf{h}(x) = \phi_{\theta_b}(x) \in \mathbb{R}^{d}.
+\end{equation}
+
+在此基础上，我们使用参数为 $\theta_c$ 的分类头（classification head）将特征映射为标量 logit：
+\begin{equation}
+    z_{\theta}(x) = \psi_{\theta_c}(\mathbf{h}(x)) \in \mathbb{R},
+\end{equation}
+其中，$\theta = (\theta_b, \theta_c)$ 表示端到端模型的全部参数。对于本文所使用的实现，分类头由一个隐藏层多层感知机（multi-layer perceptron, MLP）构成，可写为
+\begin{equation}
+    \mathbf{u}(x) = \rho\bigl(\mathbf{W}_{1}\mathbf{h}(x) + \mathbf{b}_{1}\bigr),
+\end{equation}
+\begin{equation}
+    \tilde{\mathbf{u}}(x) = \mathrm{Dropout}(\mathbf{u}(x); q),
+\end{equation}
+\begin{equation}
+    z_{\theta}(x) = \mathbf{W}_{2}\tilde{\mathbf{u}}(x) + b_{2},
+\end{equation}
+其中，$\mathbf{W}_{1} \in \mathbb{R}^{m \times d}$ 和 $\mathbf{b}_{1} \in \mathbb{R}^{m}$ 为第一层线性映射参数，$m$ 为隐藏层维度，$\rho(\cdot)$ 表示 SiLU 激活函数，$q \in [0,1)$ 为 Dropout 比例，$\mathbf{W}_{2} \in \mathbb{R}^{1 \times m}$ 和 $b_2 \in \mathbb{R}$ 为输出层参数。
+
+相应地，模型输出的阳性概率定义为
+\begin{equation}
+    f_{\theta}(x) = \sigma\bigl(z_{\theta}(x)\bigr)
+    = \frac{1}{1 + \exp\bigl(-z_{\theta}(x)\bigr)},
+\end{equation}
+其中，$\sigma(\cdot)$ 表示 Sigmoid 函数。这里“端到端”的含义不是简单地把深度网络当作静态特征提取器，而是指从输入像素到最终 logit 的全部可学习参数都在统一监督目标下共同优化。换言之，前端视觉表示与后端判别边界并非分离训练，而是通过同一个损失函数耦合更新。
+
+\subsection{Training Objective Under Class Imbalance}
+
+给定训练集 $\mathcal{D}_{\mathrm{train}}$，最直接的学习目标是最小化经验风险（empirical risk）
+\begin{equation}
+    \min_{\theta} \; \frac{1}{|\mathcal{D}_{\mathrm{train}}|}
+    \sum_{(x_i,y_i,p_i) \in \mathcal{D}_{\mathrm{train}}}
+    \ell\bigl(z_{\theta}(x_i), y_i\bigr),
+\end{equation}
+其中，$\ell(\cdot,\cdot)$ 表示单样本损失函数。由于模型直接输出 logit $z_{\theta}(x)$，我们采用带 logits 的二元交叉熵（binary cross-entropy with logits, BCEWithLogitsLoss）作为基础优化目标。对单个样本，其损失可写为
+\begin{equation}
+    \ell_{\mathrm{BCE}}\bigl(z,y\bigr)
+    = -\, y \log \sigma(z) - (1-y)\log\bigl(1-\sigma(z)\bigr).
+\end{equation}
+等价地，也可将其视为对伯努利负对数似然（negative log-likelihood）的最小化。
+
+考虑到 IDC patch 数据集通常存在显著类别不平衡（class imbalance），我们进一步允许对正类引入权重 $\omega_{+} > 0$，从而得到加权损失
+\begin{equation}
+    \ell_{\mathrm{wBCE}}\bigl(z,y\bigr)
+    = -\, \omega_{+} y \log \sigma(z)
+    - (1-y)\log\bigl(1-\sigma(z)\bigr).
+\end{equation}
+其中，$\omega_{+}$ 控制正类误分类在目标函数中的相对代价。当 $\omega_{+}=1$ 时，该式退化为标准 BCE；当 $\omega_{+}>1$ 时，优化过程会更强烈地惩罚漏检阳性样本的行为。对应地，训练目标可写为
+\begin{equation}
+    \min_{\theta} \; \mathcal{L}_{\mathrm{train}}(\theta)
+    = \frac{1}{|\mathcal{D}_{\mathrm{train}}|}
+    \sum_{(x_i,y_i,p_i) \in \mathcal{D}_{\mathrm{train}}}
+    \ell_{\mathrm{wBCE}}\bigl(z_{\theta}(x_i), y_i\bigr).
+\end{equation}
+
+这一目标与我们的工程实现严格一致：模型以前向传播输出 logits，损失层在数值稳定的形式下完成 Sigmoid 与交叉熵的联合计算；当需要处理类别不平衡时，可通过设置正类权重实现 cost-sensitive learning（代价敏感学习）。因此，后续实验中比较“是否使用正类加权”并不是附加技巧，而是上述风险最小化目标在不同代价结构下的具体实例。
+
+\subsection{Decision Rule and Binary Prediction}
+
+训练阶段最小化的是概率意义下的损失，而在推理阶段，我们最终仍需给出离散二分类决策。为此，设 $\tau \in [0,1]$ 表示决策阈值（decision threshold），则模型的预测标签定义为
+\begin{equation}
+    \hat{y}_{\tau}(x)
+    = \mathbb{I}\bigl[f_{\theta}(x) \geq \tau\bigr]
+    = \mathbb{I}\bigl[\sigma(z_{\theta}(x)) \geq \tau\bigr],
+\end{equation}
+其中，$\mathbb{I}[\cdot]$ 为示性函数（indicator function）。特别地，当 $\tau = 0.5$ 时，决策规则等价于
+\begin{equation}
+    \hat{y}_{0.5}(x) = \mathbb{I}\bigl[z_{\theta}(x) \geq 0\bigr].
+\end{equation}
+
+将阈值显式写入问题定义具有现实意义。对于医学二分类任务，阈值并不是一个纯粹的后处理超参数，而是决定漏检（false negative）与误检（false positive）权衡的临床敏感量：较小的 $\tau$ 往往提高召回率（recall），但可能降低特异度（specificity）；较大的 $\tau$ 则相反。因此，模型学习目标与决策规则应被视为两个相互关联但不完全等价的层次：前者拟合后验概率，后者根据应用目标将概率映射为操作性判断。
+
+\subsection{Empirical Risk Minimization with Patient-Wise Generalization}
+
+基于以上定义，本文研究的核心问题可以概括为：在患者级隔离约束下，给定训练子集 $\mathcal{D}_{\mathrm{train}}$，学习参数 $\theta$ 以最小化经验风险，并在未见患者构成的验证子集 $\mathcal{D}_{\mathrm{val}}$ 上评估其泛化性能。形式上，我们希望模型不仅在训练样本上实现低损失，而且在来自不同患者的样本上也具有稳定判别能力，即
+\begin{equation}
+    (x,y,p) \sim \mathcal{D}_{\mathrm{val}}
+    \quad \text{with} \quad
+    p \notin \mathcal{P}_{\mathrm{train}}.
+\end{equation}
+
+这一定义看似简单，实则规定了本文全部实验的认识论边界：我们所追求的并不是“对已见患者统计风格的记忆能力”，而是“在患者级分布迁移下对 IDC 形态模式的可泛化识别能力”。因此，无论后续比较主干网络深度、预训练策略、采样方案还是损失加权方法，它们都必须被放置在同一个 patient-wise 泛化设定下理解。只有在这一前提成立时，诸如 F1-score、Balanced Accuracy 和 ROC-AUC 等指标才具有可讨论的科学含义。
+
+\subsection{Remarks on Noise and Modeling Limits}
+
+最后，我们强调该问题的监督信号并非完美无噪。IDC patch 标签来自对局部组织区域的裁剪与标注，因此在肿瘤边界附近，样本可能包含部分癌组织、混合背景或语义模糊的过渡区域。这意味着真实条件分布 $\eta(x)$ 本身可能在某些区域接近 $0.5$，从而带来 annotation noise（标注噪声）与 aleatoric uncertainty（偶然不确定性）。在这种设定下，即使端到端模型具有足够表达能力，也未必能够将经验风险压缩到零，且不同训练策略对噪声敏感性可能存在显著差异。
+
+因此，本文后续实验并不预设“更复杂的模型必然更优”，而是将模型性能理解为数据分布、患者分组结构、监督噪声与训练目标共同作用下的结果。这样的形式化框架，也为后续关于实验协议、类别不平衡处理与性能解释的讨论提供了统一语言。
