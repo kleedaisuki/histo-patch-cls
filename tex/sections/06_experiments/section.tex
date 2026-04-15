@@ -1,30 +1,31 @@
 \section{Experiments}
 \label{sec:experiments}
 
-前文已经分别从问题定义、数据协议与方法实现层面对 IDC patch classification 的实验前提进行了形式化刻画，因此本节不再重复训练流水线或配置项本身，而是转向经验结果的组织与解释。具体而言，本节围绕两个彼此关联的问题展开：其一，在统一 patient-wise 协议下，不同 ResNet 主干网络（backbone）的深度变化是否会带来稳定的性能增益；其二，当数据划分策略由 patient-wise split 改为 patch-wise random split 时，模型训练表现与验证表现之间的关系将发生怎样的变化。前者对应模型容量与局部病理表征能力之间的关系，后者则对应评估边界是否会改变我们对模型能力的判断。
+前文已经分别从问题定义、数据协议与方法实现层面对 IDC patch classification 的实验前提进行了形式化刻画，因此本节不再重复训练流水线或配置项本身，而是集中报告经验结果。具体而言，本节围绕两个实验问题展开：其一，在统一 patient-wise 协议下，不同 ResNet 主干网络（backbone）的性能表现有何差异；其二，当数据划分策略由 patient-wise split 改为 patch-wise random split 时，训练集与验证集上的指标会呈现出怎样的变化。
 
 \subsection{Backbone Baseline Comparison}
 
-我们首先考察在严格 patient-wise 设定下，不同 ResNet 主干网络所形成的基线差异。为保证比较具有可解释性，本文仅替换主干结构本身，而保持其余训练条件不变，包括输入尺寸、数据预处理、优化超参数、训练轮数、正类权重（positive-class weight）与决策阈值。因而，\cref{tab:backbone_baseline_comparison} 中的性能差异可以主要归因于 backbone 深度及其对应的表征能力变化，而不必额外引入训练协议漂移所造成的混淆。
+我们首先考察在严格 patient-wise 设定下，不同 ResNet 主干网络所形成的基线差异。为保证比较具有可解释性，本文仅替换主干结构本身，而保持其余训练条件不变，包括输入尺寸、数据预处理、优化超参数、训练轮数、正类权重（positive-class weight）与决策阈值。
 
 \input{tables/backbone_baseline_comparison}
 
-从验证结果看，backbone 深度与泛化性能之间并未呈现简单的单调关系。ResNet-34 在 Precision、Recall、F1-score、Balanced Accuracy 与 ROC-AUC 上均略低于 ResNet-18，这表明在 $50 \times 50$ 的局部病理 patch 上，增加网络深度并不会自动转化为更优的 patient-wise 泛化。换言之，主干网络由 18 层扩展至 34 层时，额外表示能力所带来的收益至少在当前协议下并不显著，反而可能受到局部上下文有限、训练样本异质性以及优化噪声等因素的共同制约。
+从验证结果看，ResNet-18 与 ResNet-34 的整体表现接近，其中 ResNet-34 在 Precision、Recall、F1-score、Balanced Accuracy 与 ROC-AUC 上均略低于 ResNet-18。相比之下，ResNet-50 在各项关键指标上均明显优于前两者，尤其在 F1-score、Balanced Accuracy 与 ROC-AUC 上给出当前最优结果。
 
-与此不同，ResNet-50 在各项关键指标上均明显优于前两者，尤其在 F1-score、Balanced Accuracy 与 ROC-AUC 上给出当前最优结果。这说明更深的残差主干在该任务上并非没有价值，而是其收益并不表现为线性累积，而更接近一种非平滑的容量阈值效应（capacity threshold effect）：较浅到中等深度的加深未必带来稳定增益，但当表征能力扩展到某一水平之后，模型仍可能获得更充分的病理形态判别能力。基于当前结果，如果需要为后续主实验选择默认 backbone，则 ResNet-50 是最自然的候选，因为它同时给出了最佳的 F1-score、Balanced Accuracy 与 ROC-AUC。
-
-当然，这一结论仍应被理解为在统一协议、固定随机种子与单次正式运行下的经验观察，而不是关于 backbone 深度规律的统计终论。当前结果已经足以说明“更深并不意味着持续、平滑、必然更好”，也足以支持将 ResNet-50 作为后续主比较中的默认主干；但若要进一步讨论“稳定性”或“深度收益递减”的统计显著性，则仍需要补充多随机种子重复实验、均值与标准差报告，甚至更细粒度的 patient-level 重采样分析。也就是说，\cref{tab:backbone_baseline_comparison} 提供的是一个结构清晰、协议干净的主基线起点，而不是对 backbone 深度效应的最终封闭结论。
+基于当前结果，patient-wise 设定下的 backbone 表现并未随网络深度增加而呈现简单单调趋势；在本次实验中，ResNet-50 是三者中验证指标最优的 backbone。与此同时，\cref{tab:backbone_baseline_comparison} 报告的是统一协议、固定随机种子与单次正式运行下的结果，可作为后续比较的主基线。
 
 \subsection{Protocol Comparison: Patient-wise vs. Patch-wise}
 
-在完成 backbone 基线比较之后，更关键的问题转向实验协议本身。IDC patch 数据天然按患者组织，同一患者内部的图像块通常共享组织背景、染色风格、扫描条件与局部形态统计，因此切分策略不仅决定训练集与验证集的边界形式，也会实质性改变模型所面对的分布关系。正是在这一意义上，patient-wise split 与 patch-wise random split 的比较并非普通的配置消融，而是对评估协议可信性的直接检验。本文的数据层同时实现了 \texttt{split\_by\_patient()} 与 \texttt{split\_by\_patch\_random()} 两种划分方式，因而可以在统一训练配置下显式考察协议变化所诱导的性能偏移。
-
-为使协议效应的解释更加精确，\cref{tab:split_protocol_comparison} 不再只报告某一组验证指标的绝对值，而是进一步关注训练集与验证集之间的泛化落差（generalization gap）。这是因为，对于协议实验而言，真正值得警惕的现象并不只是“某种设定下验证分数更高”，而是模型是否在训练阶段呈现出过于乐观的性能表象，却无法在验证阶段保持相应水平。若某一划分策略系统性地放大了这种 train-eval 脱节，那么它即便没有在验证集上给出绝对更高的分数，也仍可能在方法学意义上产生“虚高”效应。
+在完成 backbone 基线比较之后，我们进一步比较 patient-wise split 与 patch-wise random split 两种数据划分方式。为保证可比性，实验在统一训练配置下进行，并同时报告训练集与验证集指标以及相应的训练-验证差值（train-eval gap）。
 
 \input{tables/split_protocol_comparison}
 
-从结果上看，这种协议效应具有相当一致的方向性。在 ResNet-18、ResNet-34 与 ResNet-50 三种 backbone 上，patch-wise split 的训练指标均保持在较高水平，但其验证阶段的回落幅度始终明显大于 patient-wise split。以 F1-score 为例，patch-wise 的 train-eval gap 分别为 $0.0450$、$0.0408$ 与 $0.0350$，而 patient-wise 对应仅为 $0.0228$、$0.0271$ 与 $0.0169$；在 Balanced Accuracy 上，patch-wise 的 gap 进一步达到 $0.0294$、$0.0246$ 与 $0.0205$，同样显著高于 patient-wise 的 $0.0156$、$0.0185$ 与 $0.0089$；在 ROC-AUC 上，这一趋势仍然成立，patch-wise 的 gap 分别为 $0.0103$、$0.0093$ 与 $0.0072$，而 patient-wise 仅为 $0.0048$、$0.0052$ 与 $0.0013$。这些结果共同指向同一个事实：patch-wise random split 更容易产生高训练分数，但这些分数并未以相称幅度转化为验证收益。
+从结果上看，在 ResNet-18、ResNet-34 与 ResNet-50 三种 backbone 上，patch-wise split 的训练指标均保持在较高水平，但其训练-验证差值始终大于 patient-wise split。以 F1-score 为例，patch-wise 的 train-eval gap 分别为 $0.0450$、$0.0408$ 与 $0.0350$，而 patient-wise 对应为 $0.0228$、$0.0271$ 与 $0.0169$；在 Balanced Accuracy 上，patch-wise 的 gap 分别为 $0.0294$、$0.0246$ 与 $0.0205$，patient-wise 则为 $0.0156$、$0.0185$ 与 $0.0089$；在 ROC-AUC 上，patch-wise 的 gap 分别为 $0.0103$、$0.0093$ 与 $0.0072$，而 patient-wise 分别为 $0.0048$、$0.0052$ 与 $0.0013$。
+\begin{itemize}
+    \item 在三种 backbone 上，patch-wise split 的训练指标整体更高，但对应的训练-验证差值也始终更大。
+    \item 在 F1-score 上，patch-wise 的 train-eval gap 分别为 $0.0450$、$0.0408$ 与 $0.0350$，明显高于 patient-wise 的 $0.0228$、$0.0271$ 与 $0.0169$。
+    \item 在 Balanced Accuracy 上，patch-wise 的 gap 分别为 $0.0294$、$0.0246$ 与 $0.0205$，高于 patient-wise 的 $0.0156$、$0.0185$ 与 $0.0089$。
+    \item 在 ROC-AUC 上，patch-wise 的 gap 分别为 $0.0103$、$0.0093$ 与 $0.0072$，而 patient-wise 分别为 $0.0048$、$0.0052$ 与 $0.0013$。
+    \item 整体上，patch-wise random split 更容易获得较高的训练分数，同时也伴随着更大的训练-验证差值；相比之下，patient-wise split 的训练与验证指标关系更为接近。
+\end{itemize}
 
-这一观察也有助于澄清一个常见但容易被过度简化的判断。所谓 patch-wise 的“虚高”，并不必然意味着其验证分数在数值上处处高于 patient-wise；更准确地说，它指向的是训练阶段性能被抬升得更快、更高，但这种抬升没有以稳定方式兑现到验证阶段，从而放大了训练表现与泛化表现之间的脱节。对于当前任务而言，这种脱节具有明确的方法学含义：patch-wise 划分更容易使模型利用患者内相关结构所提供的统计便利，从而在训练过程中形成过于乐观的拟合印象；相比之下，patient-wise split 虽然更严格，却给出了更一致、也更接近真实未见患者泛化情形的训练-验证关系。
-
-因此，这组协议实验最重要的结论并不是“patch-wise 的验证分数一定更高”，而是更一般、也更具有方法学说服力的结论：\emph{切分协议会显著改变模型训练表现与验证表现之间的对应关系，其中 patch-wise random split 更容易制造训练阶段的乐观信号，并放大泛化落差；patient-wise split 则为模型比较提供了更可信的评估边界。} 从论文叙事上看，这一点比单独报告某一个高分更重要，因为它直接回应了本文的核心立场，即数字病理中的可信结论首先依赖于被严格控制的实验协议。若后续需要把这一结论进一步提升为更强的经验性证据，则最自然的下一步应当是在两种协议下补充多随机种子重复实验，并对 train-eval gap 的均值、方差与分布稳定性进行系统报告。
+表中的现象为后续讨论实验协议带来的评估差异提供了直接经验基础。
