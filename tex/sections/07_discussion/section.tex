@@ -1,24 +1,131 @@
 \section{Discussion}
 \label{sec:discussion}
 
-本节讨论前述实验结果的含义与边界。按照实验设计，\cref{sec:experiments} 已经完成了“观察到什么”的报告；因此，这里重点回答“这些现象说明了什么”以及“在多大程度上可以这样理解”。
+本节不再重复实验现象本身，而是解释这些现象为什么会出现。这里我们只讨论两件事。第一，为什么在 ResNet-18、ResNet-34 与 ResNet-50 之间，会出现 $34 < 18 < 50$ 这样的结果次序。第二，为什么 patient-wise 与 patch-wise 的比较，不只是“划分方法不同导致分数变化”，而是对应两个不同的评估对象。
 
-\subsection{What the Backbone Comparison Suggests}
+\subsection{Backbone Comparison from the ResNet Architecture}
 
-\cref{tab:backbone_baseline_comparison} 显示，backbone 深度与验证性能之间并未呈现简单的单调关系。ResNet-34 相比 ResNet-18 没有带来稳定增益，而 ResNet-50 则在主要指标上取得最优结果。这样的结果提示，在当前 $50 \times 50$ 局部病理 patch 任务中，网络加深的收益更可能表现为非平滑的容量阈值效应（capacity threshold effect），而不是线性累积的深度红利。
+\cref{tab:backbone_baseline_comparison} 中最值得解释的现象，是 ResNet-34 并没有超过 ResNet-18，而 ResNet-50 又明显优于前两者。如果只把这三个模型理解成“越来越深的同一种网络”，那么这个结果会显得有些反直觉；但如果从 ResNet 家族内部的结构差异来看，它其实是可以理解的。
 
-一种自然的解释是：当模型容量仍处于较低到中等区间时，额外层数未必足以转化为可稳定利用的判别能力；而当表征能力跨过某个阈值后，更深的残差主干才开始更充分地编码局部病理形态。与此同时，这一解释仍然是经验性的，而非统计上已经封闭的结论，因为当前比较建立在统一协议、固定随机种子与单次正式运行之上。若要更稳健地讨论深度收益是否稳定存在，仍需补充多随机种子重复实验、均值与标准差报告，乃至 patient-level 重采样（resampling）分析。
+关键点在于，ResNet-18 与 ResNet-34 虽然深度不同，但它们属于同一类 basic block 架构；ResNet-50 则已经换成了 bottleneck block。前两者的增加，主要体现在“同一种残差块堆得更多”；后者的变化，则不仅是层数增加，更是中间表示方式本身发生了变化。
 
-\subsection{Why the Split Protocol Matters}
+对 ResNet-18 和 ResNet-34 而言，每个残差块都主要由两个 $3\times3$ 卷积组成。于是，从 18 层加深到 34 层，本质上是在同一组 stage 宽度、同一类 basic block 和同一末端特征维度下，继续拉长 residual chain。换句话说，这种变化更接近“在已有表示上做更多次局部修正”，而不是“打开一种新的表示空间”。在 ImageNet 这类大尺度自然图像任务上，这种加深常常仍然有益；但在本文的 $50\times50$ 局部病理 patch 上，情况不完全一样。
 
-\cref{tab:split_protocol_comparison} 的核心价值，不在于判断哪一种协议“分数更高”，而在于揭示不同划分方式会如何改变训练表现与验证表现之间的对应关系。实验结果表明，patch-wise random split 在三种 backbone 上都系统性地扩大了 train-eval gap；这意味着模型在训练阶段更容易呈现乐观信号，但这种乐观信号并没有以同等幅度兑现为验证收益。
+原因在于，小 patch 任务的空间支撑（spatial support）非常有限。随着 stem 和后续 stage 的下采样推进，特征图分辨率会很快缩小。在这种条件下，basic block 的额外堆叠并不一定持续带来新的有效上下文，反而更可能是在较小分辨率上反复做相似的局部混合。于是，ResNet-34 相比 ResNet-18 所增加的表达能力，并不一定足以稳定转化为 patient-wise 设定下的泛化收益。更直白地说，18 到 34 的变化更像是“把同一种表示做得更深”，而不是“让模型学会表示以前表示不了的结构”。
 
-从数字病理（digital pathology）的数据结构出发，这一现象是可以理解的。IDC patch 数据天然按患者组织，同一患者内部的 patch 往往共享组织背景、染色风格、扫描条件与局部形态统计。因而，当 patch 在患者内部被随机分配到训练集与验证集时，模型更容易利用患者内相关性（intra-patient correlation）所带来的统计便利。结果不是模型一定在验证集上“全面更高”，而是训练阶段的拟合印象更容易被抬高，进而放大训练与泛化之间的脱节。
+这件事还可以从末端表示维度上看得更清楚。ResNet-18 与 ResNet-34 的全局池化输出维度都是 $512$；也就是说，尽管 ResNet-34 更深，但最终交给分类头的高层表示空间并没有变宽。于是，模型增加的主要是变换路径长度，而不是高层特征空间的容量上限。在 patient-wise 设定下，额外的层数可能被用于吸收样本异质性、局部噪声或者训练波动，而不是稳定地形成对未见患者也成立的判别结构。这就为
+\begin{equation}
+    \text{ResNet-34} < \text{ResNet-18}
+\end{equation}
+提供了一个结构层面的解释。
 
-因此，所谓 patch-wise 的“虚高”，更准确地说，并不是单指某个验证分数的绝对值偏高，而是指它改变了实验者对模型能力的感知方式。若评估协议本身允许患者内相似样本同时出现在训练与验证两侧，那么模型的表面稳定性就可能部分来自边界宽松，而不是来自对未见患者的真正泛化能力。相对而言，patient-wise split 虽然更严格，却更接近真实应用场景下“未见患者”（unseen patients）的评估边界，因此也更适合作为本文的主协议。
+ResNet-50 则不一样。它使用的 bottleneck block 并不是简单地把 basic block 再堆得更长，而是在每个残差块内部引入了 $1\times1$ 卷积，对通道进行压缩、重组和扩张。这样的结构带来两层变化。第一，模型不再只是重复固定宽度上的局部卷积，而是能先在通道维度上重新组织特征，再执行空间卷积。第二，ResNet-50 的末端表示维度上升到 $2048$，远高于 ResNet-18 和 ResNet-34 的 $512$。这意味着分类头接收到的不是“更长路径产生的同维特征”，而是一个显著更丰富的高层表示空间。
 
-\subsection{Limits of the Current Evidence}
+对 IDC patch classification 这样的任务，这一点尤其重要。模型需要区分的并不是单一纹理，而是染色差异、细胞密度、局部排列和组织形态等多种线索的组合。basic block 的继续堆叠，未必足以显著提升这种组合表达能力；但 bottleneck block 所带来的通道重组能力，以及更高维的末端表示，则更有可能把这些局部病理线索组织成更可分的特征。因此，ResNet-50 的优势不应被理解为“因为 50 比 34 更深”，而更应理解为“它的表示族（representation family）本身发生了变化，而且这种变化对当前任务是有效的”。
 
-这里也需要明确当前证据的边界，避免把经验观察过早上升为过强结论。第一，当前实验主要是单次正式运行结果，尚不足以支持关于统计显著性（statistical significance）或分布稳定性的强断言。第二，当前讨论集中于 ResNet 系列与统一训练配置，因此结论首先适用于“在本任务、本数据与本配置下，协议变化如何影响结果解释”，而不能自动外推到所有结构、所有训练策略或所有数字病理任务。
+所以，$34 < 18 < 50$ 的关键并不是一个抽象的“深度非单调”现象，而是一个更具体的表达能力问题：ResNet-18 与 ResNet-34 的比较，本质上是在检验“同一种 basic-block 表示族，仅靠继续加深是否足够”；ResNet-50 则进一步改变了 block 结构、通道混合方式和末端表示维度，因此它改善的不只是优化路径长度，而是模型最终能够表达的高层特征几何。当前实验支持的结论，不是“层数越多越好”或“层数越多越差”，而是：对本文这种小 patch、patient-wise 泛化任务而言，\emph{表示方式的变化比同一种表示的继续堆叠更重要}。
 
-这恰恰也是本文方法学立场的一部分：在容易受到数据边界影响的任务中，最重要的不是尽早给出宏大解释，而是先确认实验协议是否足够可信。沿着这一路径，下一步最自然的工作包括：在两种协议下补充多随机种子重复实验，系统报告 train-eval gap 的均值、方差与分布；进一步检查 patient-level 分层重采样的稳定性；以及在保持 patient-wise 边界不变的前提下，再引入更复杂的模型或训练策略进行扩展比较。
+\subsection{Patient-Wise and Patch-Wise Estimate Different Risks}
+
+切分协议的讨论，首先要从一个更基础的问题开始：我们到底想评估什么？
+
+在本文任务里，我们真正关心的并不是“模型在一堆随机抽出来的 patch 上平均表现如何”，而是“模型面对\emph{未见过的患者}时，平均表现如何”。这是两个不同的问题。因为 IDC 数据不是普通的 i.i.d. patch 池；每个 patch 都属于某个患者，而同一患者内部的 patch 往往共享染色风格、组织背景、扫描条件和局部形态统计。既然真实应用中的目标是对新患者做判断，那么更自然的评估对象也应该定义在“患者先被采样，再从该患者产生 patch”这一层面上。
+
+基于这个目标，可以把理想的目标风险（target risk）写成
+\begin{equation}
+    \mathcal{R}_{\mathrm{out}}(\theta)
+    =
+    \mathbb{E}_{P}
+    \left[
+        \mathbb{E}_{(X,Y)\mid P}
+        \bigl[
+            \ell(f_{\theta}(X),Y)
+            \bigr]
+        \right].
+\end{equation}
+这里每个符号都对应一个很具体的含义。$P$ 表示患者（patient）；先对 $P$ 取期望，意思是“先在总体中随机抽一个患者”。$(X,Y)\mid P$ 表示“在这个患者已经确定的条件下，再看该患者产生的 patch $X$ 及其标签 $Y$”。$f_{\theta}$ 是模型，$\theta$ 是模型参数；$\ell$ 是损失函数（loss function），用来度量模型预测与真实标签之间的误差。于是，整个式子的意思就是：
+
+\begin{equation}
+    \text{先对患者平均，再对该患者内部的 patch 误差平均。}
+\end{equation}
+
+为什么目标风险必须写成这样？因为如果我们直接对所有 patch 一视同仁地平均，那么来自 patch 数量更多的患者会自动占据更大权重，而且更重要的是，这样的写法会掩盖“样本是按患者分组生成的”这一事实。上式的核心意义就在于，它把“患者”放在了外层，把“patch”放在了内层，因此评估对象从一开始就是 out-of-patient generalization，而不是无结构 patch average。
+
+接下来，patient-wise split 为什么能近似这个目标？因为它在数据划分时，先划分的是患者集合，而不是 patch 集合。设训练患者集合和验证患者集合分别为 $\mathcal{P}_{\mathrm{train}}$ 与 $\mathcal{P}_{\mathrm{val}}$，并满足
+\begin{equation}
+    \mathcal{P}_{\mathrm{train}} \cap \mathcal{P}_{\mathrm{val}} = \varnothing.
+\end{equation}
+这句话的意义很直接：验证阶段出现的患者，没有一个在训练阶段出现过。于是模型参数是用训练患者的数据估计出来的，而验证误差则在另一批患者上测量。写成式子，就是
+\begin{equation}
+    \hat{\theta}^{\mathrm{pw}}
+    =
+    \arg\min_{\theta}
+    \frac{1}{|\mathcal{D}_{\mathrm{train}}^{\mathrm{pw}}|}
+    \sum_{(x_i,y_i)\in\mathcal{D}_{\mathrm{train}}^{\mathrm{pw}}}
+    \ell(f_{\theta}(x_i),y_i),
+\end{equation}
+然后再在验证患者上计算风险：
+\begin{equation}
+    \mathcal{R}^{\mathrm{pw}}(\hat{\theta}^{\mathrm{pw}})
+    =
+    \frac{1}{|\mathcal{P}_{\mathrm{val}}|}
+    \sum_{p\in\mathcal{P}_{\mathrm{val}}}
+    \mathbb{E}_{(X,Y)\mid P=p}
+    \bigl[
+        \ell(f_{\hat{\theta}^{\mathrm{pw}}}(X),Y)
+        \bigr].
+\end{equation}
+这个式子比前面的目标风险更“经验化”，因为它不再对未知的总体患者分布取期望，而是直接对验证集中的患者做平均。但它和目标风险的结构是一致的：外层仍然是患者，内层仍然是该患者内部的 patch。因此，patient-wise split 的意义，不只是“更严格”，而是它在形式上尽量保留了目标风险的层次结构。
+
+patch-wise random split 则不是这样。它先把所有 patch 混在一起，再随机划分训练集和验证集。于是很容易出现同一个患者的 patch 同时出现在训练集和验证集，也就是
+\begin{equation}
+    \mathcal{D}_{p}^{\mathrm{train}} \neq \varnothing,
+    \qquad
+    \mathcal{D}_{p}^{\mathrm{val}} \neq \varnothing.
+\end{equation}
+这一步的后果很关键：某个患者 $p$ 不再只出现在“训练”或“验证”中的一边，而是同时出现在两边。于是模型参数
+\begin{equation}
+    \hat{\theta}^{\mathrm{patch}}
+    =
+    \arg\min_{\theta}
+    \frac{1}{|\mathcal{D}_{\mathrm{train}}^{\mathrm{patch}}|}
+    \sum_{(x_i,y_i)\in\mathcal{D}_{\mathrm{train}}^{\mathrm{patch}}}
+    \ell(f_{\theta}(x_i),y_i)
+\end{equation}
+在估计时已经“看过了”来自患者 $p$ 的部分样本；而验证误差又继续在同一患者 $p$ 的其他 patch 上计算。也就是说，训练与验证不再对应“已见患者”和“未见患者”的关系，而变成了“同一患者的部分 patch 用来训练，另一部分 patch 用来验证”。
+
+因此，patch-wise 下计算出来的风险
+\begin{equation}
+    \mathcal{R}^{\mathrm{patch}}(\hat{\theta}^{\mathrm{patch}})
+    =
+    \sum_{p}
+    \pi_p^{\mathrm{val}}
+    \mathbb{E}_{(X,Y)\mid P=p,\ \mathrm{val}}
+    \bigl[
+        \ell(f_{\hat{\theta}^{\mathrm{patch}}}(X),Y)
+        \bigr]
+\end{equation}
+就不再是在近似“未见患者风险”。这里 $\pi_p^{\mathrm{val}}$ 表示患者 $p$ 在验证集中的权重；这个写法只是为了说明，最终的验证风险仍然是不同患者误差的加权和。但和 patient-wise 最大的区别在于：这里出现的很多患者，已经部分参与过模型训练了。因此，这个风险对应的不是
+\begin{equation}
+    \text{risk on unseen patients},
+\end{equation}
+而更接近于
+\begin{equation}
+    \text{risk with within-patient overlap between train and eval}.
+\end{equation}
+
+这就是为什么我们说 patient-wise 与 patch-wise 估计的是不同风险，而不是同一个风险的两个 noisy score。它们的区别不是“同一个对象测量得更松一点或更严一点”，而是从一开始就在回答不同的问题。patient-wise 试图回答的是：模型能否外推到新患者。patch-wise 回答的则是：当训练和验证共享同一患者的统计结构时，模型表现如何。
+
+为了更清楚地说明这一点，可以把一个 patch 所包含的信息拆成两部分：
+\begin{equation}
+    h(x) = \bigl(s(x), u_p(x)\bigr).
+\end{equation}
+这里 $s(x)$ 表示真正与疾病相关、能够跨患者迁移的病理形态信号；$u_p(x)$ 表示与患者 $p$ 绑定的统计线索，例如该患者特有的染色风格、扫描噪声、背景组织模式等。如果模型的判别实际上写成
+\begin{equation}
+    f_{\theta}(x) = q\bigl(s(x),u_p(x)\bigr),
+\end{equation}
+那么 patient-wise 和 patch-wise 的分数语义就完全不同。
+
+在 patient-wise 下，验证患者没有在训练中出现过，所以 $u_p(x)$ 这一部分无法被稳定复用；模型真正能依赖的，主要只能是跨患者可迁移的 $s(x)$。而在 patch-wise 下，同一个患者在训练和验证两边都出现，于是 $u_p(x)$ 也可能成为有用信号。这样一来，较高的验证分数并不一定意味着模型学到了更多疾病相关结构；它也可能意味着模型部分利用了患者内稳定、但对新患者并不外推的统计模式。
+
+这就是为什么切分协议改变的不只是分数大小，更是分数的解释方式。patient-wise 的分数更接近“模型是否学到了能跨患者成立的病理结构”；patch-wise 的分数则混合了两部分来源：一部分来自真正的疾病相关形态学信号，另一部分来自患者内重叠所保留下来的统计便利。
