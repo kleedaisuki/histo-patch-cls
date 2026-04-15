@@ -1,24 +1,21 @@
 \section{Introduction}
 \label{sec:introduction}
 
-乳腺癌（breast cancer）仍然是全球范围内最常见的恶性肿瘤之一，而病理诊断（pathological diagnosis）依然是其分型、分级与治疗决策中的核心依据。随着全视野数字切片（whole-slide image, WSI）扫描技术的发展，组织病理图像的数字化为计算机辅助诊断（computer-aided diagnosis, CAD）与计算病理学（computational pathology）提供了前所未有的数据基础。然而，病理图像分析并不是一个“把自然图像分类方法直接迁移过来”就能被充分解决的问题：一方面，肿瘤区域的形态学异质性（morphological heterogeneity）、染色差异（stain variation）以及局部上下文的不确定性，使得判别信号往往细碎而脆弱；另一方面，数字病理真正进入临床的阻力，常常不在于模型是否足够复杂，而在于评估协议是否严谨、实验流程是否透明、结果是否能够被稳定复现。已有综述反复指出，深度学习（deep learning）虽然已经显著推动了数字病理的发展，但从研究原型走向可信、可部署系统，仍然受到数据偏倚、验证设计、泛化能力与复现性等问题的共同制约\cite{vanDerLaak2021,Komura2018,McGenity2024}。
+乳腺癌（breast cancer）是全球范围内负担最重的恶性肿瘤之一，而病理诊断（pathological diagnosis）仍然是分型、分级与治疗决策的关键依据。随着全视野数字切片（whole-slide image, WSI）技术的普及，组织病理图像的数字化持续推动计算病理学（computational pathology）发展。然而，已有综述指出，数字病理研究的主要瓶颈并不只在于模型表达能力，还在于数据偏倚、评估协议、泛化能力与可复现性等方法学问题\cite{vanDerLaak2021,Komura2018,McGenity2024}。因此，对于医学图像分析而言，模型性能必须与严格的实验设计共同讨论，方能形成可信结论。
 
-在乳腺癌病理任务中，浸润性导管癌（invasive ductal carcinoma, IDC）尤为重要。IDC 是最常见的侵袭性乳腺癌组织学亚型（histological subtype），在临床病理实践中具有明确的诊断与治疗意义\cite{Malhotra2010,Neagu2023}. 围绕 IDC 的自动识别，研究者已经提出了从传统纹理特征到卷积神经网络（convolutional neural network, CNN）的多种方法；特别是基于图像块（patch）的学习范式，使得研究者能够将高分辨率切片切分为可计算的局部区域，从而把原本难以直接建模的 WSI 任务转化为局部二分类问题\cite{CruzRoa2014,Abdolahi2020}. 这一范式具有明确的工程优势：它降低了显存和算力门槛，使数据增强、批处理训练和模型对比更加直接，也使 patch-level IDC detection 成为更大尺度病理分析流程中的基础子任务。也正因如此，公开 IDC patch 数据集被广泛用作基线验证平台与教学研究载体。
+在乳腺癌病理任务中，浸润性导管癌（invasive ductal carcinoma, IDC）是最常见的侵袭性组织学亚型（histological subtype），具有明确的临床意义\cite{Malhotra2010,Neagu2023}. 围绕 IDC 自动识别，研究已从传统特征工程逐步过渡到卷积神经网络（convolutional neural network, CNN）方法；其中，基于图像块（patch）的学习范式因其计算成本较低、实现路径清晰而被广泛采用，并成为更大尺度数字病理流程中的基础子任务\cite{CruzRoa2014,Abdolahi2020}. 不过，patch-level 设定的便利性也容易掩盖其统计结构上的复杂性。
 
-但恰恰是在这种“看似简单”的 patch 二分类设定中，最容易被忽视的问题出现了。公开 IDC patch 数据通常并不是独立同分布（independent and identically distributed, i.i.d.）的离散样本集合，而是从有限数量患者的切片中裁剪而来；同一患者、同一张切片、甚至相邻区域之间往往共享强烈的组织结构、染色风格与扫描条件。若在 patch 层面直接随机划分训练集与验证集，那么来自同一患者的高度相似 patch 可能同时进入不同数据子集，模型便可能在无意中利用患者特异性线索（patient-specific cues）而非真正可泛化的病理形态特征，从而导致性能被系统性高估。类似的泄漏（data leakage）现象在医学影像人工智能中早已被证明会显著抬高测试结果；当数据存在重复受试者、切片相关性或切层级展开时，错误的数据划分策略尤其容易制造乐观偏差（optimistic bias）\cite{Yagis2021,Tampu2022,Rosenblatt2024}. 对于数字病理而言，这并不是一个边缘实现细节，而是决定结论是否可信的前提条件。
+具体而言，公开 IDC patch 数据通常并非独立同分布（independent and identically distributed, i.i.d.）样本，而是由有限数量患者的切片裁剪得到；同一患者内部的 patch 往往共享组织结构、染色风格与扫描条件。若直接采用 patch-wise 随机划分，训练集与验证集之间便可能混入高度相关的患者内样本，模型也可能借助患者特异性线索（patient-specific cues）获得虚高性能，而非学习到真正可迁移的病理形态特征。类似的数据泄漏（data leakage）与乐观偏差（optimistic bias）在医学影像人工智能中已被反复证实\cite{Yagis2021,Tampu2022,Rosenblatt2024}。因此，对 IDC patch classification 而言，划分协议并非实现细节，而是决定评估是否有效的前提。
 
-因此，本文的出发点并不是再提出一个刻意包装的“新模型”，而是回到更基础、也更常被低估的问题：在 IDC patch classification 这一经典任务上，怎样建立一个\emph{协议严格（protocol-aware）、配置驱动（configuration-driven）、结果可复现（reproducible）}的实验框架，使模型比较建立在干净的数据流和可信的验证逻辑之上？我们认为，在当前数字病理研究中，严谨的实验设计与透明的工程组织并不是“附属品”，而是与模型结构同等重要的科学对象。尤其在公开数据集被高频复用的背景下，若忽视 patient-wise split、随机种子控制、训练/评估解耦、日志与配置留痕等基础问题，那么即便得到漂亮的 Accuracy 或 ROC-AUC，也很难说明模型真正学到了可迁移的病理知识。
+基于这一问题意识，本文关注的重点不是提出额外复杂的网络模块，而是在 IDC patch classification 任务上建立一个\emph{协议严格（protocol-aware）、配置驱动（configuration-driven）、结果可复现（reproducible）}的实验框架。围绕 Kaggle 公开的 Breast Histopathology Images 数据集，我们在数据层显式采用 patient-wise split，以保证同一患者的 patch 不跨越训练集与验证集；在系统层以 \texttt{PyTorch} 和 \texttt{Python~3.11} 为基础，将数据发现、缓存、模型构建、训练、评估、配置解析与应用层编排解耦，并使用 \texttt{dataclass} 统一承载配置，从而形成单向、可追踪的数据流。这样做的目标不是追求架构新奇性，而是先把实验边界、运行语义与结果归因关系建立清楚，使后续比较建立在可复核的协议之上。
 
-基于这一认识，本文围绕 Kaggle 公开的 Breast Histopathology Images（IDC）数据集，构建了一个面向 IDC patch 二分类的模块化实验管线。该数据集由乳腺癌组织切片中裁剪得到的 RGB patch 构成，每个样本带有是否含 IDC 的二元标签；其典型优势在于规模较大、任务明确、进入门槛低，但其结构化来源同样意味着若不尊重患者分组就容易产生信息泄漏。针对这一风险，我们在数据层严格采用 patient-wise split，使同一患者的全部 patch 仅属于训练集或验证集之一；在系统层面，我们以 \texttt{PyTorch} 和 \texttt{Python~3.11} 为基础，将数据发现、缓存、模型构建、训练、评估、配置解析与应用层编排进行解耦，并使用 \texttt{dataclass} 统一承载配置，从而形成单向、可追踪的数据流。这样的设计并不追求炫目的架构新颖性，而是强调：在一个容易被协议错误“做高分”的医学视觉任务中，\emph{先把实验做对，再讨论模型做强}。
+在此基础上，本文采用可切换的预训练 ResNet 主干网络（backbone）与轻量分类头构建端到端基线，并在统一设置下组织两类彼此相关的经验比较：其一是不同 backbone 的基线比较，用以观察标准深度模型在严格 patient-wise 设定下能够达到的性能边界；其二是 patient-wise 与 patch-wise 两种切分协议的比较，用以检验评估边界变化会如何影响训练表现与验证表现之间的对应关系。与此同时，针对 IDC 数据中的类别不平衡（class imbalance），本文在数据与优化两侧同时保留 weighted sampler 与损失加权等控制手段，以便在同一实验框架内讨论召回率（recall）、特异度（specificity）、F1-score 与 Balanced Accuracy 等指标之间的权衡。
 
-在模型选择上，我们采用可切换的 ResNet 主干网络（backbone），并在其上构建轻量分类头，以建立稳定、可比较的深度学习基线。之所以采用这一策略，是因为在当前阶段，本文最需要回答的并不是“某个特制模块是否又提升了 0.3\%”，而是：在严格 patient-wise 设定下，标准预训练骨干网络能达到怎样的性能上限？类别不平衡（class imbalance）、阈值选择（decision threshold）、采样方式与损失加权会如何影响 Recall、Specificity、F1-score 与 Balanced Accuracy 等更符合医学判别需求的指标？这些问题既具有方法学意义，也直接决定后续更复杂模型研究的起点是否可靠。
-
-从更广的视角看，本文也试图回应数字病理研究中一个常见张力：领域正在快速拥抱更大规模、更强表达能力的模型，但真正决定研究价值的，往往不是“模型看起来有多先进”，而是“实验结论能否经得起复查、复现与迁移”。因此，我们希望本文提供的不仅是一组 IDC patch 分类结果，更是一套能够支持后续比较、消融与扩展研究的实验地基（experimental foundation）。在这个意义上，本文更接近一篇面向计算病理实证研究（empirical study）的工作：它以清晰的问题定义为起点，以严格的数据划分为边界，以模块化工程实现为支撑，力图为 IDC patch classification 提供一个可信、可复验、可演化的基线框架。
+进一步地，本文并不把这些设计仅仅视为若干工程安排，而是通过问题形式化与优化分析，将 patient-grouped distribution、代价敏感训练（cost-sensitive training）与阈值化决策（thresholded decision rule）置于统一表述之下。换言之，本文希望强调的是：在数字病理这类高相关、强异质的数据环境中，可信结论不仅依赖于模型本身，还依赖于实验协议、数据流治理、理论表述与工程实现之间是否保持一致。基于这一立场，本文旨在为 IDC patch classification 提供一个可复验、可扩展且便于后续消融与比较的实证研究基线。
 
 综上，本文的主要贡献可以概括为：
 \begin{enumerate}
-    \item 我们围绕 IDC patch classification 构建了一个模块化、配置驱动且可复现的实验框架，将数据、模型、训练、评估与应用层编排解耦，提升了实验透明性与可扩展性；
-    \item 我们在实验协议上显式采用 patient-wise split，以避免同一患者样本跨训练/验证集合带来的数据泄漏风险，从而使性能评估更加可信；
-    \item 我们在统一协议下建立基于预训练 ResNet 的稳定基线，并为后续系统比较 backbone、类别不平衡处理策略及阈值选择提供了干净的实验起点。
+    \item 我们围绕 IDC patch classification 构建了一个模块化、配置驱动且可复现的实验框架，将数据准备、模型构建、训练、评估与应用层编排解耦，并在统一协议下组织 backbone 基线比较与切分协议比较，从而为该任务提供一个可复验、可扩展且便于后续消融研究的实证基线；
+    \item 我们将数据流中的方法学风险显式纳入实验设计，把 patient-wise split 作为正式评估的核心约束，并在数据准备流水线中结合 weighted sampler、类别不平衡控制、缓存与可追踪批次结构，系统回应患者内相关性、采样偏置与训练分布失衡等问题，使结果解释建立在更可信的数据边界之上；
+    \item 我们不仅给出工程实现，而且从问题形式化与理论动机出发，对 patient-grouped distribution、代价敏感训练（cost-sensitive training）与阈值化决策（thresholded decision rule）进行统一表述和分析，使后续实验现象能够被置于同一个统计学习框架下理解，而不只是被当作若干彼此分离的工程经验。
 \end{enumerate}
-
