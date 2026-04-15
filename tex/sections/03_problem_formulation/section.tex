@@ -71,99 +71,67 @@
 \end{equation}
 这一 group-aware splitting（组感知划分）策略保证了患者级隔离（patient-level separation），也使得后续评估更接近模型在未见患者上的真实泛化行为。
 
-\subsection{End-to-End Parametric Model}
+\subsection{Parametric Search Under Imbalance and Thresholded Decision}
 
-我们采用端到端深度学习框架对映射 $f_{\theta}$ 进行参数化。令
+在形式化层面，本文并不预先限定 $f_{\theta}$ 必须由何种具体网络结构实例化，而是将其视为一个由参数空间 $\Theta$ 索引的假设族（hypothesis class）
 \begin{equation}
-    \phi_{\theta_b}: \mathcal{X} \rightarrow \mathbb{R}^{d}
+    \mathcal{F}
+    = \{f_{\theta} : \mathcal{X} \rightarrow [0,1] \mid \theta \in \Theta\}.
 \end{equation}
-表示主干网络（backbone network），其中，$\theta_b$ 为主干参数，$d$ 为输出特征维度。本文中，$\phi_{\theta_b}$ 由卷积神经网络（convolutional neural network, CNN）实例化，并具体采用可切换的 ResNet 主干。给定输入图像块 $x$，主干网络首先输出特征表示
+这里，$\theta$ 统摄从输入像素到输出概率的全部可学习自由度；“端到端”（end-to-end）的含义仅在于，这些参数在统一监督信号下被联合搜索，而不是先固定特征、再单独拟合分类器。等价地，也可以写成某个实值判别函数 $z_{\theta}: \mathcal{X} \rightarrow \mathbb{R}$ 与概率映射的复合
 \begin{equation}
-    \mathbf{h}(x) = \phi_{\theta_b}(x) \in \mathbb{R}^{d}.
+    f_{\theta}(x) = \sigma\bigl(z_{\theta}(x)\bigr),
 \end{equation}
+其中，$\sigma(\cdot)$ 为 Sigmoid 函数。这样的写法保留了后续方法部分自由选择具体参数化形式的空间，也使 formulation 保持在学习问题而非工程实现的层次。
 
-在此基础上，我们使用参数为 $\theta_c$ 的分类头（classification head）将特征映射为标量 logit：
+给定训练集 $\mathcal{D}_{\mathrm{train}}$，参数搜索的核心可表述为经验风险最小化（empirical risk minimization, ERM）问题：
 \begin{equation}
-    z_{\theta}(x) = \psi_{\theta_c}(\mathbf{h}(x)) \in \mathbb{R},
+    \theta^{\star}
+    \in
+    \arg\min_{\theta \in \Theta}
+    \mathcal{L}_{\mathrm{train}}(\theta),
 \end{equation}
-其中，$\theta = (\theta_b, \theta_c)$ 表示端到端模型的全部参数。对于本文所使用的实现，分类头由一个隐藏层多层感知机（multi-layer perceptron, MLP）构成，可写为
+其中
 \begin{equation}
-    \mathbf{u}(x) = \rho\bigl(\mathbf{W}_{1}\mathbf{h}(x) + \mathbf{b}_{1}\bigr),
-\end{equation}
-\begin{equation}
-    \tilde{\mathbf{u}}(x) = \mathrm{Dropout}(\mathbf{u}(x); q),
-\end{equation}
-\begin{equation}
-    z_{\theta}(x) = \mathbf{W}_{2}\tilde{\mathbf{u}}(x) + b_{2},
-\end{equation}
-其中，$\mathbf{W}_{1} \in \mathbb{R}^{m \times d}$ 和 $\mathbf{b}_{1} \in \mathbb{R}^{m}$ 为第一层线性映射参数，$m$ 为隐藏层维度，$\rho(\cdot)$ 表示 SiLU 激活函数，$q \in [0,1)$ 为 Dropout 比例，$\mathbf{W}_{2} \in \mathbb{R}^{1 \times m}$ 和 $b_2 \in \mathbb{R}$ 为输出层参数。
-
-相应地，模型输出的阳性概率定义为
-\begin{equation}
-    f_{\theta}(x) = \sigma\bigl(z_{\theta}(x)\bigr)
-    = \frac{1}{1 + \exp\bigl(-z_{\theta}(x)\bigr)},
-\end{equation}
-其中，$\sigma(\cdot)$ 表示 Sigmoid 函数。这里“端到端”的含义不是简单地把深度网络当作静态特征提取器，而是指从输入像素到最终 logit 的全部可学习参数都在统一监督目标下共同优化。换言之，前端视觉表示与后端判别边界并非分离训练，而是通过同一个损失函数耦合更新。
-
-\subsection{Training Objective Under Class Imbalance}
-
-给定训练集 $\mathcal{D}_{\mathrm{train}}$，最直接的学习目标是最小化经验风险（empirical risk）
-\begin{equation}
-    \min_{\theta} \; \frac{1}{|\mathcal{D}_{\mathrm{train}}|}
+    \mathcal{L}_{\mathrm{train}}(\theta)
+    =
+    \frac{1}{|\mathcal{D}_{\mathrm{train}}|}
     \sum_{(x_i,y_i,p_i) \in \mathcal{D}_{\mathrm{train}}}
-    \ell\bigl(z_{\theta}(x_i), y_i\bigr),
+    \ell\bigl(f_{\theta}(x_i), y_i; \lambda\bigr).
 \end{equation}
-其中，$\ell(\cdot,\cdot)$ 表示单样本损失函数。由于模型直接输出 logit $z_{\theta}(x)$，我们采用带 logits 的二元交叉熵（binary cross-entropy with logits, BCEWithLogitsLoss）作为基础优化目标。对单个样本，其损失可写为
+这里，$\ell(\cdot,\cdot;\lambda)$ 表示带有代价控制参数 $\lambda$ 的单样本损失，$\lambda$ 用于刻画类别不平衡（class imbalance）下不同误分类类型的相对代价。若采用伯努利负对数似然（negative log-likelihood）对应的二元交叉熵（binary cross-entropy, BCE），则可写为
 \begin{equation}
-    \ell_{\mathrm{BCE}}\bigl(z,y\bigr)
-    = -\, y \log \sigma(z) - (1-y)\log\bigl(1-\sigma(z)\bigr).
+    \ell_{\lambda}(f,y)
+    = -\, \lambda y \log f - (1-y)\log(1-f),
 \end{equation}
-等价地，也可将其视为对伯努利负对数似然（negative log-likelihood）的最小化。
+其中 $\lambda = 1$ 退化为标准 BCE，而 $\lambda > 1$ 时会增大对阳性漏检的惩罚。于是，类别不平衡处理不再被理解为训练阶段附加的工程技巧，而是参数搜索所依赖的目标函数族本身的一部分。
 
-考虑到 IDC patch 数据集通常存在显著类别不平衡（class imbalance），我们进一步允许对正类引入权重 $\omega_{+} > 0$，从而得到加权损失
+然而，对医学二分类任务而言，仅仅搜索得到 $\theta^{\star}$ 仍不足以完全定义最终判别器。因为训练目标学习的是概率估计，而实际部署需要离散决策规则。为此，引入阈值参数 $\tau \in [0,1]$，定义预测函数
 \begin{equation}
-    \ell_{\mathrm{wBCE}}\bigl(z,y\bigr)
-    = -\, \omega_{+} y \log \sigma(z)
-    - (1-y)\log\bigl(1-\sigma(z)\bigr).
+    \hat{y}_{\theta,\tau}(x)
+    =
+    \mathbb{I}\bigl[f_{\theta}(x) \geq \tau\bigr].
 \end{equation}
-其中，$\omega_{+}$ 控制正类误分类在目标函数中的相对代价。当 $\omega_{+}=1$ 时，该式退化为标准 BCE；当 $\omega_{+}>1$ 时，优化过程会更强烈地惩罚漏检阳性样本的行为。对应地，训练目标可写为
+特别地，当 $\tau = 0.5$ 时，上式对应于对对称代价结构下的默认判决；而当任务更关注召回率（recall）或特异度（specificity）时，$\tau$ 应被视为与 $\theta$ 相互耦合的决策参数，而不是无关紧要的后处理常数。因此，从更完整的角度看，本文研究的并非单一参数 $\theta$ 的搜索，而是在 patient-wise 泛化约束下，对参数化概率模型与阈值化决策规则所构成的二元组
 \begin{equation}
-    \min_{\theta} \; \mathcal{L}_{\mathrm{train}}(\theta)
-    = \frac{1}{|\mathcal{D}_{\mathrm{train}}|}
-    \sum_{(x_i,y_i,p_i) \in \mathcal{D}_{\mathrm{train}}}
-    \ell_{\mathrm{wBCE}}\bigl(z_{\theta}(x_i), y_i\bigr).
+    (\theta, \tau) \in \Theta \times [0,1]
 \end{equation}
+进行联合选择。后续实验中比较不同损失加权方案与阈值设定，本质上都是在这一统一问题表述下，对不同代价结构与决策偏好的系统考察。
 
-这一目标与我们的工程实现严格一致：模型以前向传播输出 logits，损失层在数值稳定的形式下完成 Sigmoid 与交叉熵的联合计算；当需要处理类别不平衡时，可通过设置正类权重实现 cost-sensitive learning（代价敏感学习）。因此，后续实验中比较“是否使用正类加权”并不是附加技巧，而是上述风险最小化目标在不同代价结构下的具体实例。
+\subsection{Generalization Setting and Modeling Limits}
 
-\subsection{Decision Rule and Binary Prediction}
-
-训练阶段最小化的是概率意义下的损失，而在推理阶段，我们最终仍需给出离散二分类决策。为此，设 $\tau \in [0,1]$ 表示决策阈值（decision threshold），则模型的预测标签定义为
+基于以上定义，本文研究的核心问题可以概括为：在患者级隔离约束下，给定训练子集 $\mathcal{D}_{\mathrm{train}}$，学习参数 $\theta$ 并选择决策阈值 $\tau$，使所得判别器在经验风险意义下拟合训练数据，同时在未见患者构成的验证子集 $\mathcal{D}_{\mathrm{val}}$ 上保持稳定性能。形式上，我们关心的不是
 \begin{equation}
-    \hat{y}_{\tau}(x)
-    = \mathbb{I}\bigl[f_{\theta}(x) \geq \tau\bigr]
-    = \mathbb{I}\bigl[\sigma(z_{\theta}(x)) \geq \tau\bigr],
+    (x,y,p) \sim \mathcal{D}_{\mathrm{train}},
 \end{equation}
-其中，$\mathbb{I}[\cdot]$ 为示性函数（indicator function）。特别地，当 $\tau = 0.5$ 时，决策规则等价于
-\begin{equation}
-    \hat{y}_{0.5}(x) = \mathbb{I}\bigl[z_{\theta}(x) \geq 0\bigr].
-\end{equation}
-
-将阈值显式写入问题定义具有现实意义。对于医学二分类任务，阈值并不是一个纯粹的后处理超参数，而是决定漏检（false negative）与误检（false positive）权衡的临床敏感量：较小的 $\tau$ 往往提高召回率（recall），但可能降低特异度（specificity）；较大的 $\tau$ 则相反。因此，模型学习目标与决策规则应被视为两个相互关联但不完全等价的层次：前者拟合后验概率，后者根据应用目标将概率映射为操作性判断。
-
-\subsection{Empirical Risk Minimization with Patient-Wise Generalization}
-
-基于以上定义，本文研究的核心问题可以概括为：在患者级隔离约束下，给定训练子集 $\mathcal{D}_{\mathrm{train}}$，学习参数 $\theta$ 以最小化经验风险，并在未见患者构成的验证子集 $\mathcal{D}_{\mathrm{val}}$ 上评估其泛化性能。形式上，我们希望模型不仅在训练样本上实现低损失，而且在来自不同患者的样本上也具有稳定判别能力，即
+上的记忆能力本身，而是当
 \begin{equation}
     (x,y,p) \sim \mathcal{D}_{\mathrm{val}}
     \quad \text{with} \quad
-    p \notin \mathcal{P}_{\mathrm{train}}.
+    p \notin \mathcal{P}_{\mathrm{train}}
 \end{equation}
+时，模型是否仍能识别与 IDC 相关的形态学模式。换言之，本文全部实验都应被理解为在 patient-wise 分布迁移（distribution shift）下，对概率估计、代价敏感训练与阈值化决策联合效果的考察；只有在这一前提下，F1-score、Balanced Accuracy 与 ROC-AUC 等指标才具有可解释的科学含义。
 
-这一定义看似简单，实则规定了本文全部实验的认识论边界：我们所追求的并不是“对已见患者统计风格的记忆能力”，而是“在患者级分布迁移下对 IDC 形态模式的可泛化识别能力”。因此，无论后续比较主干网络深度、预训练策略、采样方案还是损失加权方法，它们都必须被放置在同一个 patient-wise 泛化设定下理解。只有在这一前提成立时，诸如 F1-score、Balanced Accuracy 和 ROC-AUC 等指标才具有可讨论的科学含义。
+与此同时，这一泛化问题还受到监督噪声与数据生成机制本身的限制。IDC patch 标签来自局部区域裁剪与标注，在肿瘤边界、混合组织区域或语义过渡区域附近，真实条件分布 $\eta(x)$ 可能天然接近 $0.5$。这意味着任务不仅包含 epistemic uncertainty（认知不确定性），还包含不可忽略的 aleatoric uncertainty（偶然不确定性）与 annotation noise（标注噪声）。因此，即使假设族 $\mathcal{F}$ 具有充分表达能力，经验风险也未必能够被压缩到零；不同训练目标、类别加权方案与阈值设定，也可能因为对噪声敏感性不同而呈现出不同的性能轮廓。
 
-\subsection{Remarks on Noise and Modeling Limits}
-
-最后，我们强调该问题的监督信号并非完美无噪。IDC patch 标签来自对局部组织区域的裁剪与标注，因此在肿瘤边界附近，样本可能包含部分癌组织、混合背景或语义模糊的过渡区域。这意味着真实条件分布 $\eta(x)$ 本身可能在某些区域接近 $0.5$，从而带来 annotation noise（标注噪声）与 aleatoric uncertainty（偶然不确定性）。在这种设定下，即使端到端模型具有足够表达能力，也未必能够将经验风险压缩到零，且不同训练策略对噪声敏感性可能存在显著差异。
-
-因此，本文后续实验并不预设“更复杂的模型必然更优”，而是将模型性能理解为数据分布、患者分组结构、监督噪声与训练目标共同作用下的结果。这样的形式化框架，也为后续关于实验协议、类别不平衡处理与性能解释的讨论提供了统一语言。
+从这个意义上说，本文并不把 IDC patch 分类理解为一个“只要模型更复杂就必然更优”的静态拟合问题，而是把它看作一个受患者分组结构、类别不平衡、决策代价与监督噪声共同约束的统计学习问题。上述 formulation 的作用，正是在后续实验协议与方法比较之前，先明确本文真正要解决的对象、允许的比较边界，以及结论能够成立的条件范围。
