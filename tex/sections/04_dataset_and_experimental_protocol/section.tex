@@ -123,13 +123,17 @@
 \subsection{Broadcast-Synchronized Execution for Concurrent Experiments}
 \label{subsec:broadcast_synchronized_execution}
 
-当实验进入批量比较（例如在相同数据协议下同时运行多个 backbone 或配置变体）时，系统瓶颈不再只来自模型计算，还来自数据通路在并发环境中的复制语义。对于类 Unix 平台，利用成熟内存映射（memory mapping）机制的优秀设计可以缓解这一问题，基于 \texttt{fork} 的写时复制（copy-on-write, COW）通常能够在进程派生初期暂时共享只读页，从而降低样本索引、路径表与运行时元数据的复制成本；但在 Windows 上，这类共享语义并不天然可用，批量实验更容易把原本逻辑上相同的数据描述重复物化为多个私有副本，元数据复制、DataLoader 组织与日志 I/O 的综合开销仍然会显著侵占用于模型比较的资源预算。基于这一动机，我们在应用层流水线中引入一种受单指令多线程（single-instruction multiple-thread, SIMT）思想启发的批量执行协议。其核心不是耦合多个实验的优化过程，而是让\emph{拥有同一数据配置}的多个请求共享同一条上游数据流，并仅在下游分叉为彼此独立的训练器（trainer）或评估器（evaluator）。设批量请求集合为
+当实验进入批量比较（例如在相同 patient-wise split 与数据处理协议下同时运行多个 backbone 或配置变体）时，系统瓶颈不再只来自模型计算，还来自数据通路在并发环境中的复制语义。对于类 Unix 平台，基于 \texttt{fork} 的写时复制（copy-on-write, COW）通常能够在进程派生初期暂时共享只读页，从而降低样本索引、路径表与运行时元数据的复制成本；但在 Windows 上，这类共享语义并不天然可用，批量实验更容易把原本逻辑上相同的数据描述重复物化为多个私有副本，元数据复制、DataLoader 组织与日志 I/O 的综合开销仍然会显著侵占用于模型比较的资源预算。基于这一动机，我们在应用层流水线中引入一种受单指令多线程（single-instruction multiple-thread, SIMT）思想启发的批量执行框架（batched execution framework）。其核心不是耦合多个实验的优化过程，而是让\emph{共享同一执行前提}的多个请求复用同一条上游数据流，并仅在下游分叉为彼此独立的训练器（trainer）或评估器（evaluator）。这里的“同一执行前提”并不只指数据配置本身，还包括会影响 DataLoader 随机行为与后端执行语义的控制项。设批量请求集合为
 \begin{equation}
     \mathcal{Q} = \{q_1, q_2, \dots, q_M\},
 \end{equation}
-其中每个请求 $q_j$ 关联一个数据配置 $\mathcal{C}^{(j)}_{\mathrm{data}}$。我们首先按照数据配置等价关系进行分组：
+其中每个请求 $q_j$ 关联一个共享执行键（shared execution key）
 \begin{equation}
-    \mathcal{G}_k = \{q_j \in \mathcal{Q} : \mathcal{C}^{(j)}_{\mathrm{data}} = \mathcal{C}^{(k)}_{\mathrm{data}}\}.
+    \mathcal{K}^{(j)} = \bigl(\mathcal{C}^{(j)}_{\mathrm{data}}, s_j, d_j, b_j \bigr),
+\end{equation}
+其中 $s_j$ 为主随机种子，$d_j$ 表示 deterministic algorithms（确定性算法）开关，$b_j$ 表示 cuDNN benchmark 开关。我们首先按照共享执行键的等价关系进行分组：
+\begin{equation}
+    \mathcal{G}_k = \{q_j \in \mathcal{Q} : \mathcal{K}^{(j)} = \mathcal{K}^{(k)}\}.
 \end{equation}
 对于同一组 $\mathcal{G}_k$，系统只构造一个 DataModule 与一个源加载器（source loader）$L_k$，然后将由 $L_k$ 产生的 batch 序列
 \begin{equation}
@@ -137,9 +141,9 @@
 \end{equation}
 广播（broadcast）到多个消费者线程。于是，对任意属于该组的实验请求 $q_j$，其训练或评估过程不再从私有数据加载器读取，而是消费来自同一上游源流的副本
 \begin{equation}
-    \mathcal{S}_k^{(j)} \equiv \mathcal{S}_k.
+    \mathcal{S}_k^{(j)} \approx \mathcal{S}_k.
 \end{equation}
-这里的“等价”仅指输入 batch 的次序与内容一致，而不意味着消费者之间共享优化器、模型参数或随机状态；每个消费者仍维护独立的训练轨迹与 checkpoint，因此实验隔离性保持不变，而数据准备的重复成本被压缩。
+这里的“近似相等”意味着：在消费者处理速度正常、队列未出现显著背压（backpressure）的绝大多数运行情形下，组内实验会接收相同的上游 batch 内容与次序；但该框架并不承诺在所有竞态条件（race conditions）下都维持严格无损广播。更准确地说，它优先保证训练线程可终止性、epoch 边界可达性与整体吞吐稳定性，而非在极端拥塞下为每个消费者维持代价更高的严格锁步复制。与此同时，这种近似仅作用于共享数据源的传递语义，并不意味着消费者之间共享优化器、模型参数或随机状态；每个消费者仍维护独立的训练轨迹与 checkpoint，因此实验隔离性保持不变，而数据准备的重复成本被压缩。
 
 更重要的是，这种广播不是按 step 强制锁步（lock-step）同步，而是按训练轮次（epoch）设置同步边界。源加载器每完整遍历一次训练集，就向对应消费者队列注入一个 epoch token（轮次边界标记）；消费者据此结束当前轮次，并在需要时进入下一轮消费。若记第 $j$ 个训练请求所需 epoch 数为 $E_j$，则该消费者对源加载器的总消费轮数满足
 \begin{equation}
@@ -149,7 +153,7 @@
 \begin{equation}
     P_{\max} = \max_j P_j
 \end{equation}
-次，即可满足组内所有实验的训练需求。这样做带来两点直接收益：其一，数据元信息、样本路径解析与 DataLoader 编排只需建立一次，从而降低宿主内存占用；其二，多个模型变体在每一轮接收同构输入序列，使配置比较更接近“仅改变模型或超参数，而不改变上游数据暴露轨迹”的受控实验。
+次，即可满足组内所有实验的训练需求。这样做带来两点直接收益：其一，数据元信息、样本路径解析与 DataLoader 编排只需建立一次，从而降低宿主内存占用；其二，在常规运行区间内，多个模型变体在每一轮通常接收同构输入序列，使配置比较更接近“仅改变模型或超参数，而不改变上游数据暴露轨迹”的受控实验。我们也承认，这种设计本质上是一种 systems trade-off（系统权衡）：当极端背压出现时，框架会优先保证阶段收束与线程退出，而不是为极少见的严苛竞态条件引入更重的同步开销。考虑到此类情形在正常实验负载下通常不会触发，且其代价主要体现在并发执行框架的边界行为而非模型语义本身，我们总体认为这一权衡是可接受的。
 
 与数据广播相配套，日志系统也被显式设计为生产者-消费者（producer-consumer）结构。具体而言，所有模块级 logger 并不直接向终端或文件执行 I/O，而是先通过队列处理器（QueueHandler）将日志记录写入全局日志队列
 \begin{equation}
@@ -161,4 +165,4 @@
 \end{equation}
 这一异步日志设计的价值不仅在于线程安全（thread safety），更在于它最小化了训练线程中的串行区（critical serial region）：模型训练不必在每次记录 loss、metric 或 checkpoint 事件时等待底层 I/O 完成，从而减少日志系统对吞吐与时序稳定性的反向扰动。同时，由于最终写出仍由单一监听器顺序完成，日志文本在全局上保持统一格式与可审计的时间序列结构。
 
-从实验协议的角度看，数据广播与异步日志并非附属优化，而是面向跨平台高性能执行（cross-platform high-performance execution）的基础设施约束。前者抑制并发实验对内存与数据管线的重复消耗，后者抑制并发运行对日志输出路径的竞争；两者共同保证批量比较能够在不同平台的复制语义与 I/O 行为并不相同的前提下，仍然以可扩展、可审计且资源开销可控的方式稳定完成。
+从实验协议与系统框架的角度看，数据广播与异步日志并非附属优化，而是面向跨平台高性能执行（cross-platform high-performance execution）的基础设施约束。前者抑制并发实验对内存与数据管线的重复消耗，后者抑制并发运行对日志输出路径的竞争；两者共同保证批量比较能够在不同平台的复制语义与 I/O 行为并不相同的前提下，仍然以可扩展、可审计且资源开销可控的方式稳定完成。若将本文同时视为一个面向病理图像实验的轻量级 systems paper，则这一小节所描述的并发广播执行与异步日志路由，正构成该框架在应用层实验编排（application-level experiment orchestration）上的核心实现要素。
