@@ -19,7 +19,7 @@ from torch import Tensor
 from torch.utils.data import DataLoader, Dataset, Sampler, WeightedRandomSampler
 from torchvision import transforms as T
 
-from .utils import get_logger
+from .utils import build_torch_generator, get_logger, seed_worker
 
 
 IMAGE_SUFFIXES: tuple[str, ...] = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
@@ -118,6 +118,20 @@ class Batch:
         return Batch(
             images=self.images.to(device, non_blocking=non_blocking),
             labels=self.labels.to(device, non_blocking=non_blocking),
+            patient_ids=self.patient_ids,
+            paths=self.paths,
+        )
+
+    def pin_memory(self) -> "Batch":
+        """@brief 固定批次内存；Pin tensors in this batch into page-locked memory.
+
+        @return 固定内存后的新批次；A new batch with page-locked tensors.
+        @note
+          自定义 batch 需要实现 `pin_memory()`，DataLoader 才会自动执行 pinned-memory 传输。
+        """
+        return Batch(
+            images=_pin_tensor(self.images),
+            labels=_pin_tensor(self.labels),
             patient_ids=self.patient_ids,
             paths=self.paths,
         )
@@ -385,6 +399,32 @@ def collate_patch_examples(examples: Sequence[PatchExample]) -> Batch:
     return Batch(images=images, labels=labels, patient_ids=patient_ids, paths=paths)
 
 
+def _pin_tensor(tensor: Tensor) -> Tensor:
+    """@brief 固定单个张量内存；Pin one tensor into page-locked memory.
+
+    @param tensor 待固定的张量；Tensor to pin.
+    @return 固定后的张量；Pinned tensor.
+    """
+    if tensor.device.type != "cpu":
+        return tensor
+    return tensor.pin_memory()
+
+
+def _build_loader_generators() -> tuple[torch.Generator, torch.Generator]:
+    """@brief 构建训练/验证 DataLoader 随机源；Build train/val DataLoader generators.
+
+    @return 训练与验证生成器元组；Tuple of train/validation generators.
+    @note
+      基于当前全局 Torch seed 派生两个独立 generator，
+      保证 worker 进程和 DataLoader 内部采样拥有稳定、可复现的起点。
+    """
+    base_seed = int(torch.initial_seed())
+    return (
+        build_torch_generator(base_seed),
+        build_torch_generator(base_seed + 1),
+    )
+
+
 def build_data_module(config: DataModuleConfig) -> DataModule:
     """@brief 构建可直接供训练使用的数据模块；Build a ready-to-use data module."""
     LOGGER.info(
@@ -409,6 +449,7 @@ def build_data_module(config: DataModuleConfig) -> DataModule:
 
     worker_count = config.loader.num_workers
     persistent_workers = worker_count > 0
+    train_generator, val_generator = _build_loader_generators()
 
     train_loader = DataLoader(
         dataset=train_dataset,
@@ -420,6 +461,8 @@ def build_data_module(config: DataModuleConfig) -> DataModule:
         persistent_workers=persistent_workers,
         drop_last=config.loader.train_drop_last,
         collate_fn=collate_patch_examples,
+        worker_init_fn=seed_worker,
+        generator=train_generator,
     )
 
     val_loader = DataLoader(
@@ -431,6 +474,8 @@ def build_data_module(config: DataModuleConfig) -> DataModule:
         persistent_workers=persistent_workers,
         drop_last=config.loader.eval_drop_last,
         collate_fn=collate_patch_examples,
+        worker_init_fn=seed_worker,
+        generator=val_generator,
     )
 
     LOGGER.info(
