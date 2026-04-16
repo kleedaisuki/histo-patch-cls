@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
-from histoclass import project_root
+from histoclass import config_to_dict, project_root
 
-from .pipeline import PipelineMode, format_result_for_console, run_pipeline_from_paths
+from .pipeline import PipelineMode, PipelineRequest, PipelineResult, run_batch_pipeline
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -20,8 +21,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="IDC patch classification pipeline runner.",
     )
     parser.add_argument(
-        "config_name",
+        "config_names",
         type=str,
+        nargs="+",
         help="Config name (resolved as configs/<name>.json) or direct JSON path.",
     )
     parser.add_argument(
@@ -75,15 +77,88 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    config_path = resolve_config_path(args.config_name)
     mode = PipelineMode(args.mode)
-    result = run_pipeline_from_paths(
-        config_path=config_path,
-        mode=mode,
-        checkpoint_path=args.checkpoint,
+    requests = tuple(
+        PipelineRequest(
+            config_path=resolve_config_path(config_name),
+            mode=mode,
+            checkpoint_path=args.checkpoint,
+        )
+        for config_name in args.config_names
     )
-    print(format_result_for_console(result))
+    batch_result = run_batch_pipeline(requests)
+    for index, (request, result) in enumerate(
+        zip(requests, batch_result.results, strict=True)
+    ):
+        if index > 0:
+            print()
+        print(
+            json.dumps(
+                _serialize_result_for_console(request=request, result=result),
+                ensure_ascii=False,
+                indent=4,
+            )
+        )
     return 0
+
+
+def _serialize_result_for_console(
+    *,
+    request: PipelineRequest,
+    result: PipelineResult,
+) -> dict[str, object]:
+    """@brief 序列化单条请求结果；Serialize one request-result pair."""
+    return {
+        "request": {
+            "config_path": (
+                str(request.config_path) if request.config_path is not None else None
+            ),
+            "mode": request.mode.value,
+            "checkpoint_path": (
+                str(request.checkpoint_path)
+                if request.checkpoint_path is not None
+                else None
+            ),
+        },
+        "config": config_to_dict(result.config),
+        "seed": {
+            "seed": result.seed_state.seed,
+            "deterministic": result.seed_state.deterministic,
+            "benchmark": result.seed_state.benchmark,
+            "cuda_available": result.seed_state.cuda_available,
+        },
+        "checkpoint_path": (
+            result.checkpoint_path.as_posix()
+            if result.checkpoint_path is not None
+            else None
+        ),
+        "train": (
+            {
+                "epochs": len(result.train_summary.history),
+                "final_checkpoint": (
+                    result.train_summary.final_checkpoint.as_posix()
+                    if result.train_summary.final_checkpoint is not None
+                    else None
+                ),
+                "final_train_loss": result.train_summary.history[-1].train.loss,
+                "final_train_metrics": result.train_summary.history[
+                    -1
+                ].train.metrics.to_dict(),
+            }
+            if result.train_summary is not None
+            else None
+        ),
+        "eval": (
+            {
+                "samples": result.evaluation.samples,
+                "steps": result.evaluation.steps,
+                "loss": result.evaluation.loss,
+                "metrics": result.evaluation.metrics.to_dict(),
+            }
+            if result.evaluation is not None
+            else None
+        ),
+    }
 
 
 if __name__ == "__main__":

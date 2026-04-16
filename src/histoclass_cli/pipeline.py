@@ -1,11 +1,14 @@
-"""Application-level pipeline orchestration for histoclass."""
+﻿"""Application-level pipeline orchestration for histoclass."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import json
+import queue
 from pathlib import Path
-from typing import Any
+import threading
+from typing import Any, Callable, Sequence
 
 import torch
 
@@ -56,7 +59,7 @@ class PipelineResult:
     @param seed_state 随机种子状态；Applied seed state.
     @param train_summary 训练结果；Training summary.
     @param evaluation 评估结果；Evaluation result.
-    @param checkpoint_path 本次使用或生成的 checkpoint 路径；Used or generated checkpoint path.
+    @param checkpoint_path 本次使用或生成的 checkpoint 路径；Used/generated checkpoint path.
     """
 
     config: AppConfig
@@ -64,6 +67,65 @@ class PipelineResult:
     train_summary: TrainSummary | None
     evaluation: EvaluationResult | None
     checkpoint_path: Path | None
+
+
+@dataclass(frozen=True, slots=True)
+class BatchPipelineResult:
+    """@brief 批量 pipeline 结果；Batch pipeline execution result.
+
+    @param results 每个请求对应的执行结果；Per-request execution results.
+    """
+
+    results: tuple[PipelineResult, ...]
+
+
+@dataclass(slots=True)
+class _PreparedRequest:
+    """@brief 预处理后的请求上下文；Prepared request runtime context."""
+
+    index: int
+    request: PipelineRequest
+    config: AppConfig
+    seed_state: SeedState
+    model: torch.nn.Module
+    checkpoint_path: Path | None
+    train_summary: TrainSummary | None = None
+    evaluation: EvaluationResult | None = None
+
+
+class _QueueIterable:
+    """@brief 队列可迭代包装器；Queue-backed iterable wrapper."""
+
+    def __init__(self, data_queue: "queue.Queue[object]", stop_token: object) -> None:
+        self._data_queue = data_queue
+        self._stop_token = stop_token
+
+    def __iter__(self):  # noqa: ANN204
+        while True:
+            item = self._data_queue.get()
+            if item is self._stop_token:
+                return
+            yield item
+
+
+def _signal_queue_stop(data_queue: "queue.Queue[object]", stop_token: object) -> None:
+    """@brief 无阻塞注入停止标记；Inject stop token without deadlock.
+
+    @param data_queue 目标队列；Target queue.
+    @param stop_token 停止标记对象；Stop token object.
+    @note
+      当消费者已退出时，队列可能长期满载。本函数会在必要时丢弃旧数据以保证 stop token 可写入，
+      避免 finally 阶段死循环。
+    """
+    while True:
+        try:
+            data_queue.put(stop_token, timeout=0.1)
+            return
+        except queue.Full:
+            try:
+                data_queue.get_nowait()
+            except queue.Empty:
+                continue
 
 
 def run_pipeline(request: PipelineRequest) -> PipelineResult:
@@ -123,6 +185,132 @@ def run_pipeline(request: PipelineRequest) -> PipelineResult:
     )
 
 
+def run_batch_pipeline(requests: Sequence[PipelineRequest]) -> BatchPipelineResult:
+    """@brief 广播并发执行多请求；Run batched pipelines with broadcasted concurrent stages.
+
+    @param requests pipeline 请求序列；Pipeline request sequence.
+    @return 批量执行结果；Batch execution result.
+    @note
+      同一 DataModuleConfig 的请求会共享一份 DataLoader 作为生产者（producer），
+      并将每个 batch 广播到多个训练/评估线程（consumers）并发执行。
+    """
+    if not requests:
+        raise ValueError("requests must not be empty.")
+
+    prepared: list[_PreparedRequest] = []
+    for index, request in enumerate(requests):
+        config = load_config(request.config_path)
+        LOGGER.info(
+            "Batch pipeline item started: mode=%s, config_path=%s",
+            request.mode.value,
+            request.config_path,
+        )
+
+        seed_state = seed_everything(
+            seed=config.seed.seed,
+            deterministic=config.seed.deterministic,
+            benchmark=config.seed.benchmark,
+        )
+        model = build_model(config.model)
+
+        checkpoint_path = _resolve_checkpoint_path(
+            request.checkpoint_path,
+            mode=request.mode,
+        )
+        if checkpoint_path is not None:
+            _load_model_checkpoint(model=model, checkpoint_path=checkpoint_path)
+
+        prepared.append(
+            _PreparedRequest(
+                index=index,
+                request=request,
+                config=config,
+                seed_state=seed_state,
+                model=model,
+                checkpoint_path=checkpoint_path,
+            )
+        )
+
+    data_module_cache: dict[Any, Any] = {}
+    grouped: dict[Any, list[_PreparedRequest]] = {}
+    for item in prepared:
+        grouped.setdefault(item.config.data, []).append(item)
+
+    for cache_key, group_items in grouped.items():
+        cached_module = data_module_cache.get(cache_key)
+        if cached_module is None:
+            data_module = build_data_module(group_items[0].config.data)
+            data_module_cache[cache_key] = data_module
+            LOGGER.info(
+                "Batch data module cache miss: built new module for key=%s", cache_key
+            )
+        else:
+            data_module = cached_module
+            LOGGER.info(
+                "Batch data module cache hit: reusing existing module for key=%s",
+                cache_key,
+            )
+
+        train_items = [
+            item
+            for item in group_items
+            if item.request.mode in (PipelineMode.TRAIN, PipelineMode.TRAIN_EVAL)
+        ]
+        if train_items:
+            train_jobs = [
+                (f"train-worker-{item.index}", _build_train_worker(item))
+                for item in train_items
+            ]
+            _run_broadcast_stage(
+                stage_name="train",
+                source_loader=data_module.train_loader,
+                jobs=train_jobs,
+            )
+            for item in train_items:
+                if (
+                    item.train_summary is not None
+                    and item.train_summary.final_checkpoint is not None
+                ):
+                    item.checkpoint_path = item.train_summary.final_checkpoint
+
+        eval_items = [
+            item
+            for item in group_items
+            if item.request.mode in (PipelineMode.EVAL, PipelineMode.TRAIN_EVAL)
+        ]
+        if eval_items:
+            eval_jobs = [
+                (f"eval-worker-{item.index}", _build_eval_worker(item))
+                for item in eval_items
+            ]
+            _run_broadcast_stage(
+                stage_name="eval",
+                source_loader=data_module.val_loader,
+                jobs=eval_jobs,
+            )
+
+    ordered = sorted(prepared, key=lambda item: item.index)
+    results: list[PipelineResult] = []
+    for item in ordered:
+        _log_pipeline_summary(
+            mode=item.request.mode,
+            train_summary=item.train_summary,
+            evaluation=item.evaluation,
+            checkpoint_path=item.checkpoint_path,
+        )
+        results.append(
+            PipelineResult(
+                config=item.config,
+                seed_state=item.seed_state,
+                train_summary=item.train_summary,
+                evaluation=item.evaluation,
+                checkpoint_path=item.checkpoint_path,
+            )
+        )
+
+    return BatchPipelineResult(results=tuple(results))
+
+
 def run_pipeline_from_paths(
     *,
     config_path: str | Path | None,
@@ -174,7 +362,9 @@ def format_result_for_console(result: PipelineResult) -> str:
                 else None
             ),
             "final_train_loss": result.train_summary.history[-1].train.loss,
-            "final_train_metrics": result.train_summary.history[-1].train.metrics.to_dict(),
+            "final_train_metrics": result.train_summary.history[
+                -1
+            ].train.metrics.to_dict(),
         }
 
     if result.evaluation is not None:
@@ -185,9 +375,105 @@ def format_result_for_console(result: PipelineResult) -> str:
             "metrics": result.evaluation.metrics.to_dict(),
         }
 
-    import json
-
     return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _build_train_worker(item: _PreparedRequest) -> Callable[[Any], None]:
+    """@brief 构建训练工作函数；Build one train worker callable."""
+    trainer = Trainer(model=item.model, config=item.config.trainer)
+
+    def _work(loader_iterable: Any) -> None:
+        item.train_summary = trainer.fit(loader_iterable)
+
+    return _work
+
+
+def _build_eval_worker(item: _PreparedRequest) -> Callable[[Any], None]:
+    """@brief 构建评估工作函数；Build one eval worker callable."""
+    evaluator = Evaluator(model=item.model, config=item.config.evaluator)
+
+    def _work(loader_iterable: Any) -> None:
+        item.evaluation = evaluator.evaluate(loader_iterable)
+
+    return _work
+
+
+def _run_broadcast_stage(
+    *,
+    stage_name: str,
+    source_loader: Any,
+    jobs: Sequence[tuple[str, Callable[[Any], None]]],
+) -> None:
+    """@brief 广播执行阶段；Run one broadcast stage with producer-consumer threads.
+
+    @param stage_name 阶段名称；Stage name.
+    @param source_loader 生产者输入迭代器；Producer source iterable.
+    @param jobs 消费者任务集合；Consumer job collection.
+    """
+    if not jobs:
+        return
+
+    stop_token = object()
+    data_queues = [queue.Queue(maxsize=8) for _ in jobs]
+    stop_event = threading.Event()
+    errors: list[BaseException] = []
+    error_lock = threading.Lock()
+    threads: list[threading.Thread] = []
+
+    def _record_error(exc: BaseException) -> None:
+        with error_lock:
+            if not errors:
+                errors.append(exc)
+        stop_event.set()
+
+    def _consume(
+        *,
+        name: str,
+        fn: Callable[[Any], None],
+        data_queue: "queue.Queue[object]",
+    ) -> None:
+        try:
+            fn(_QueueIterable(data_queue, stop_token))
+        except BaseException as exc:  # pragma: no cover - exceptional path
+            LOGGER.exception("Broadcast %s consumer failed: %s", stage_name, name)
+            _record_error(exc)
+
+    for idx, (name, fn) in enumerate(jobs):
+        thread = threading.Thread(
+            target=_consume,
+            kwargs={"name": name, "fn": fn, "data_queue": data_queues[idx]},
+            name=f"{stage_name}-{idx}",
+            daemon=True,
+        )
+        thread.start()
+        threads.append(thread)
+
+    try:
+        for batch in source_loader:
+            if stop_event.is_set():
+                break
+            for data_queue in data_queues:
+                while not stop_event.is_set():
+                    try:
+                        data_queue.put(batch, timeout=0.1)
+                        break
+                    except queue.Full:
+                        continue
+    except BaseException as exc:  # pragma: no cover - exceptional path
+        _record_error(exc)
+    finally:
+        stop_event.set()
+        for data_queue in data_queues:
+            _signal_queue_stop(data_queue, stop_token)
+        for thread in threads:
+            thread.join(timeout=30.0)
+            if thread.is_alive():
+                raise RuntimeError(
+                    f"Broadcast stage '{stage_name}' thread did not terminate: {thread.name}"
+                )
+
+    if errors:
+        raise RuntimeError(f"Broadcast stage '{stage_name}' failed.") from errors[0]
 
 
 def _resolve_checkpoint_path(
@@ -246,15 +532,18 @@ def _log_pipeline_summary(
             ),
         )
 
-    LOGGER.info("Pipeline completed | mode=%s checkpoint=%s", mode.value, checkpoint_path)
+    LOGGER.info(
+        "Pipeline completed | mode=%s checkpoint=%s", mode.value, checkpoint_path
+    )
 
 
 __all__ = [
+    "BatchPipelineResult",
     "PipelineMode",
     "PipelineRequest",
     "PipelineResult",
     "format_result_for_console",
+    "run_batch_pipeline",
     "run_pipeline",
     "run_pipeline_from_paths",
 ]
-
