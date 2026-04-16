@@ -3,12 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 from histoclass.config import AppConfig, SeedConfig
 from histoclass.data import DataModuleConfig
 from histoclass.engine import EvaluationResult, EvaluatorConfig, TrainerConfig
 from histoclass.model import ModelConfig
 from histoclass.utils import SeedState, compute_binary_metrics
-from histoclass_cli.pipeline import PipelineMode, PipelineRequest, run_pipeline
+from histoclass_cli.pipeline import (
+    PipelineMode,
+    PipelineRequest,
+    _run_broadcast_stage,
+    run_batch_pipeline,
+    run_pipeline,
+)
 
 
 @dataclass(slots=True)
@@ -139,3 +147,81 @@ def test_pipeline_eval_mode_wires_evaluator_interface(monkeypatch, tmp_path) -> 
     assert result.train_summary is None
     assert result.evaluation is not None
     assert result.checkpoint_path == ckpt_path.resolve()
+
+
+def test_run_batch_pipeline_reuses_data_module_for_same_data_config(
+    monkeypatch, tmp_path
+) -> None:
+    config = _build_test_config()
+    model_sentinel = object()
+    train_loader = [object(), object()]
+    val_loader = [object()]
+    data_module = _DummyDataModule(train_loader=train_loader, val_loader=val_loader)
+
+    monkeypatch.setattr("histoclass_cli.pipeline.load_config", lambda _: config)
+    monkeypatch.setattr(
+        "histoclass_cli.pipeline.seed_everything",
+        lambda **_: SeedState(7, True, False, False),
+    )
+    monkeypatch.setattr("histoclass_cli.pipeline.build_model", lambda _: model_sentinel)
+
+    counters: dict[str, int] = {"build_data_module": 0, "fit": 0}
+
+    def _build_data_module_stub(_):  # noqa: ANN001
+        counters["build_data_module"] += 1
+        return data_module
+
+    class _TrainerStub:
+        def __init__(self, *, model, config):  # noqa: ANN001
+            assert model is model_sentinel
+            assert config == config_obj.trainer
+
+        def fit(self, loader):  # noqa: ANN001
+            counters["fit"] += 1
+            assert hasattr(loader, "__iter__")
+            checkpoint = tmp_path / f"epoch{counters['fit']:03d}.pt"
+            checkpoint.write_text("ok", encoding="utf-8")
+            epoch_result = type(
+                "EpochResultLike",
+                (),
+                {
+                    "epoch": 1,
+                    "train": type(
+                        "TrainLike", (), {"loss": 0.1, "metrics": _MetricsStub()}
+                    )(),
+                },
+            )()
+            return type(
+                "TrainSummaryLike",
+                (),
+                {"history": (epoch_result,), "final_checkpoint": checkpoint},
+            )()
+
+    config_obj = config
+    monkeypatch.setattr("histoclass_cli.pipeline.build_data_module", _build_data_module_stub)
+    monkeypatch.setattr("histoclass_cli.pipeline.Trainer", _TrainerStub)
+
+    batch_result = run_batch_pipeline(
+        (
+            PipelineRequest(config_path="configs/train.json", mode=PipelineMode.TRAIN),
+            PipelineRequest(config_path="configs/default.json", mode=PipelineMode.TRAIN),
+        )
+    )
+
+    assert len(batch_result.results) == 2
+    assert counters["build_data_module"] == 1
+    assert counters["fit"] == 2
+
+
+def test_run_broadcast_stage_raises_without_deadlock_on_consumer_error() -> None:
+    source_loader = [1, 2, 3, 4, 5]
+
+    def _bad_consumer(_):  # noqa: ANN001
+        raise RuntimeError("consumer failed")
+
+    with pytest.raises(RuntimeError, match="Broadcast stage 'train' failed"):
+        _run_broadcast_stage(
+            stage_name="train",
+            source_loader=source_loader,
+            jobs=(("bad", _bad_consumer),),
+        )
