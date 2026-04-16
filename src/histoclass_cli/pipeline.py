@@ -7,7 +7,9 @@ from enum import Enum
 import json
 import queue
 from pathlib import Path
+import sys
 import threading
+import traceback
 from typing import Any, Callable, Sequence
 
 import torch
@@ -135,24 +137,77 @@ class _QueueIterable:
             yield item
 
 
-def _signal_queue_token(data_queue: "queue.Queue[object]", token: object) -> None:
+def _signal_queue_token(
+    data_queue: "queue.Queue[object]",
+    token: object,
+    *,
+    stage_name: str,
+    token_name: str,
+    queue_name: str,
+) -> None:
     """@brief 无阻塞注入控制标记；Inject control token without deadlock.
 
     @param data_queue 目标队列；Target queue.
     @param token 控制标记对象；Control token object.
+    @param stage_name 广播阶段名称；Broadcast stage name.
+    @param token_name 控制标记名称；Human-readable control token name.
+    @param queue_name 队列名称；Human-readable queue name.
     @note
       当消费者已退出时，队列可能长期满载。本函数会在必要时丢弃旧数据以保证 stop token 可写入，
       避免 finally 阶段死循环。
     """
+    dropped_batches = 0
     while True:
         try:
             data_queue.put(token, timeout=0.1)
+            if dropped_batches > 0:
+                LOGGER.warning(
+                    "Broadcast %s injected %s into %s after dropping %d queued batch(es). "
+                    "This indicates lossy approximate broadcast under backpressure.",
+                    stage_name,
+                    token_name,
+                    queue_name,
+                    dropped_batches,
+                )
             return
         except queue.Full:
             try:
                 data_queue.get_nowait()
+                dropped_batches += 1
             except queue.Empty:
                 continue
+
+
+def _build_batch_group_key(item: _PreparedRequest) -> tuple[Any, int, bool, bool]:
+    """@brief 构建批量数据模块缓存键；Build batch data-module cache key.
+
+    @param item 预处理后的请求项；Prepared request item.
+    @return 缓存键元组；Cache key tuple.
+    @note
+      DataLoader 的随机行为依赖 seed / deterministic / benchmark 设置，
+      因而这些字段必须纳入共享 DataModule 的缓存键。
+    """
+    return (
+        item.config.data,
+        item.seed_state.seed,
+        item.seed_state.deterministic,
+        item.seed_state.benchmark,
+    )
+
+
+def _format_thread_stack(thread: threading.Thread) -> str:
+    """@brief 提取线程栈文本；Extract a formatted Python stack for one thread.
+
+    @param thread 目标线程；Target thread.
+    @return 栈文本；Formatted stack text.
+    """
+    if thread.ident is None:
+        return "<thread ident unavailable>"
+
+    frame = sys._current_frames().get(thread.ident)
+    if frame is None:
+        return "<python frame unavailable>"
+    return "".join(traceback.format_stack(frame))
 
 
 def run_pipeline(request: PipelineRequest) -> PipelineResult:
@@ -261,11 +316,16 @@ def run_batch_pipeline(requests: Sequence[PipelineRequest]) -> BatchPipelineResu
     data_module_cache: dict[Any, Any] = {}
     grouped: dict[Any, list[_PreparedRequest]] = {}
     for item in prepared:
-        grouped.setdefault(item.config.data, []).append(item)
+        grouped.setdefault(_build_batch_group_key(item), []).append(item)
 
     for cache_key, group_items in grouped.items():
         cached_module = data_module_cache.get(cache_key)
         if cached_module is None:
+            seed_everything(
+                seed=group_items[0].seed_state.seed,
+                deterministic=group_items[0].seed_state.deterministic,
+                benchmark=group_items[0].seed_state.benchmark,
+            )
             data_module = build_data_module(group_items[0].config.data)
             data_module_cache[cache_key] = data_module
             LOGGER.info(
@@ -535,16 +595,34 @@ def _run_broadcast_stage(
 
             for idx in active_indexes:
                 if threads[idx].is_alive():
-                    _signal_queue_token(data_queues[idx], epoch_token)
+                    _signal_queue_token(
+                        data_queues[idx],
+                        epoch_token,
+                        stage_name=stage_name,
+                        token_name="epoch_token",
+                        queue_name=normalized_jobs[idx].name,
+                    )
     except BaseException as exc:  # pragma: no cover - exceptional path
         _record_error(exc)
     finally:
         stop_event.set()
-        for data_queue in data_queues:
-            _signal_queue_token(data_queue, stop_token)
+        for idx, data_queue in enumerate(data_queues):
+            _signal_queue_token(
+                data_queue,
+                stop_token,
+                stage_name=stage_name,
+                token_name="stop_token",
+                queue_name=normalized_jobs[idx].name,
+            )
         for thread in threads:
             thread.join(timeout=30.0)
             if thread.is_alive():
+                LOGGER.error(
+                    "Broadcast %s thread join timed out: %s\n%s",
+                    stage_name,
+                    thread.name,
+                    _format_thread_stack(thread),
+                )
                 raise RuntimeError(
                     f"Broadcast stage '{stage_name}' thread did not terminate: {thread.name}"
                 )
