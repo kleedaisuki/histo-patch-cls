@@ -93,33 +93,60 @@ class _PreparedRequest:
     evaluation: EvaluationResult | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _BroadcastJob:
+    """@brief 广播任务描述；Broadcast job descriptor.
+
+    @param name 任务名称；Job name.
+    @param fn 消费者工作函数；Consumer worker function.
+    @param passes 需要消费 source_loader 的轮次；Number of source-loader passes required.
+    """
+
+    name: str
+    fn: Callable[[Any], None]
+    passes: int = 1
+
+
 class _QueueIterable:
     """@brief 队列可迭代包装器；Queue-backed iterable wrapper."""
 
-    def __init__(self, data_queue: "queue.Queue[object]", stop_token: object) -> None:
+    def __init__(
+        self,
+        data_queue: "queue.Queue[object]",
+        *,
+        stop_token: object,
+        epoch_token: object,
+    ) -> None:
         self._data_queue = data_queue
         self._stop_token = stop_token
+        self._epoch_token = epoch_token
+        self._closed = False
 
     def __iter__(self):  # noqa: ANN204
+        if self._closed:
+            return
         while True:
             item = self._data_queue.get()
             if item is self._stop_token:
+                self._closed = True
+                return
+            if item is self._epoch_token:
                 return
             yield item
 
 
-def _signal_queue_stop(data_queue: "queue.Queue[object]", stop_token: object) -> None:
-    """@brief 无阻塞注入停止标记；Inject stop token without deadlock.
+def _signal_queue_token(data_queue: "queue.Queue[object]", token: object) -> None:
+    """@brief 无阻塞注入控制标记；Inject control token without deadlock.
 
     @param data_queue 目标队列；Target queue.
-    @param stop_token 停止标记对象；Stop token object.
+    @param token 控制标记对象；Control token object.
     @note
       当消费者已退出时，队列可能长期满载。本函数会在必要时丢弃旧数据以保证 stop token 可写入，
       避免 finally 阶段死循环。
     """
     while True:
         try:
-            data_queue.put(stop_token, timeout=0.1)
+            data_queue.put(token, timeout=0.1)
             return
         except queue.Full:
             try:
@@ -258,7 +285,11 @@ def run_batch_pipeline(requests: Sequence[PipelineRequest]) -> BatchPipelineResu
         ]
         if train_items:
             train_jobs = [
-                (f"train-worker-{item.index}", _build_train_worker(item))
+                _BroadcastJob(
+                    name=f"train-worker-{item.index}",
+                    fn=_build_train_worker(item),
+                    passes=item.config.trainer.epochs,
+                )
                 for item in train_items
             ]
             _run_broadcast_stage(
@@ -280,7 +311,11 @@ def run_batch_pipeline(requests: Sequence[PipelineRequest]) -> BatchPipelineResu
         ]
         if eval_items:
             eval_jobs = [
-                (f"eval-worker-{item.index}", _build_eval_worker(item))
+                _BroadcastJob(
+                    name=f"eval-worker-{item.index}",
+                    fn=_build_eval_worker(item),
+                    passes=1,
+                )
                 for item in eval_items
             ]
             _run_broadcast_stage(
@@ -402,7 +437,7 @@ def _run_broadcast_stage(
     *,
     stage_name: str,
     source_loader: Any,
-    jobs: Sequence[tuple[str, Callable[[Any], None]]],
+    jobs: Sequence[_BroadcastJob | tuple[str, Callable[[Any], None]]],
 ) -> None:
     """@brief 广播执行阶段；Run one broadcast stage with producer-consumer threads.
 
@@ -413,8 +448,22 @@ def _run_broadcast_stage(
     if not jobs:
         return
 
+    normalized_jobs: list[_BroadcastJob] = []
+    for job in jobs:
+        if isinstance(job, _BroadcastJob):
+            normalized_jobs.append(job)
+            continue
+        if len(job) != 2:
+            raise ValueError("jobs tuple format must be (name, fn).")
+        normalized_jobs.append(_BroadcastJob(name=job[0], fn=job[1], passes=1))
+
+    for job in normalized_jobs:
+        if job.passes <= 0:
+            raise ValueError("job passes must be a positive integer.")
+
     stop_token = object()
-    data_queues = [queue.Queue(maxsize=8) for _ in jobs]
+    epoch_token = object()
+    data_queues = [queue.Queue(maxsize=8) for _ in normalized_jobs]
     stop_event = threading.Event()
     errors: list[BaseException] = []
     error_lock = threading.Lock()
@@ -433,15 +482,21 @@ def _run_broadcast_stage(
         data_queue: "queue.Queue[object]",
     ) -> None:
         try:
-            fn(_QueueIterable(data_queue, stop_token))
+            fn(
+                _QueueIterable(
+                    data_queue,
+                    stop_token=stop_token,
+                    epoch_token=epoch_token,
+                )
+            )
         except BaseException as exc:  # pragma: no cover - exceptional path
             LOGGER.exception("Broadcast %s consumer failed: %s", stage_name, name)
             _record_error(exc)
 
-    for idx, (name, fn) in enumerate(jobs):
+    for idx, job in enumerate(normalized_jobs):
         thread = threading.Thread(
             target=_consume,
-            kwargs={"name": name, "fn": fn, "data_queue": data_queues[idx]},
+            kwargs={"name": job.name, "fn": job.fn, "data_queue": data_queues[idx]},
             name=f"{stage_name}-{idx}",
             daemon=True,
         )
@@ -449,22 +504,44 @@ def _run_broadcast_stage(
         threads.append(thread)
 
     try:
-        for batch in source_loader:
+        max_passes = max(job.passes for job in normalized_jobs)
+        for pass_idx in range(max_passes):
             if stop_event.is_set():
                 break
-            for data_queue in data_queues:
-                while not stop_event.is_set():
-                    try:
-                        data_queue.put(batch, timeout=0.1)
-                        break
-                    except queue.Full:
+
+            active_indexes = [
+                idx
+                for idx, job in enumerate(normalized_jobs)
+                if pass_idx < job.passes and threads[idx].is_alive()
+            ]
+            if not active_indexes:
+                break
+
+            for batch in source_loader:
+                if stop_event.is_set():
+                    break
+                for idx in active_indexes:
+                    if not threads[idx].is_alive():
                         continue
+                    data_queue = data_queues[idx]
+                    while not stop_event.is_set():
+                        try:
+                            data_queue.put(batch, timeout=0.1)
+                            break
+                        except queue.Full:
+                            if not threads[idx].is_alive():
+                                break
+                            continue
+
+            for idx in active_indexes:
+                if threads[idx].is_alive():
+                    _signal_queue_token(data_queues[idx], epoch_token)
     except BaseException as exc:  # pragma: no cover - exceptional path
         _record_error(exc)
     finally:
         stop_event.set()
         for data_queue in data_queues:
-            _signal_queue_stop(data_queue, stop_token)
+            _signal_queue_token(data_queue, stop_token)
         for thread in threads:
             thread.join(timeout=30.0)
             if thread.is_alive():
