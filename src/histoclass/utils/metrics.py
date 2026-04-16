@@ -201,20 +201,19 @@ def _binary_roc_auc(targets: Tensor, probabilities: Tensor) -> float | None:
     sorted_scores = probabilities[sorted_indices]
     sorted_targets = targets[sorted_indices]
 
-    ranks = torch.zeros_like(sorted_scores, dtype=torch.float64)
-    start = 0
-    size = int(sorted_scores.numel())
-    while start < size:
-        end = start + 1
-        while end < size and sorted_scores[end] == sorted_scores[start]:
-            end += 1
-        average_rank = (start + end - 1) / 2.0 + 1.0
-        ranks[start:end] = average_rank
-        start = end
+    counts = torch.unique_consecutive(sorted_scores, return_counts=True)[1]
+    end_positions = torch.cumsum(counts, dim=0)
+    start_positions = end_positions - counts
+    average_ranks = (
+        start_positions.to(dtype=torch.float64)
+        + end_positions.to(dtype=torch.float64)
+        - 1.0
+    ) / 2.0 + 1.0
+    ranks = torch.repeat_interleave(average_ranks, counts)
 
     positive_rank_sum = float(ranks[sorted_targets == 1].sum().item())
     u_statistic = positive_rank_sum - (total_positives * (total_positives + 1) / 2.0)
-    auc = u_statistic / (total_positives * total_negatives + EPSILON)
+    auc = u_statistic / (total_positives * total_negatives)
     return float(max(0.0, min(1.0, auc)))
 
 

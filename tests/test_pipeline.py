@@ -11,6 +11,7 @@ from histoclass.engine import EvaluationResult, EvaluatorConfig, TrainerConfig
 from histoclass.model import ModelConfig
 from histoclass.utils import SeedState, compute_binary_metrics
 from histoclass_cli.pipeline import (
+    _BroadcastJob,
     PipelineMode,
     PipelineRequest,
     _run_broadcast_stage,
@@ -213,6 +214,82 @@ def test_run_batch_pipeline_reuses_data_module_for_same_data_config(
     assert counters["fit"] == 2
 
 
+def test_run_batch_pipeline_does_not_reuse_data_module_for_different_seed(
+    monkeypatch, tmp_path
+) -> None:
+    config_a = _build_test_config()
+    config_b = AppConfig(
+        data=config_a.data,
+        model=config_a.model,
+        trainer=config_a.trainer,
+        evaluator=config_a.evaluator,
+        seed=SeedConfig(seed=99, deterministic=True, benchmark=False),
+    )
+    model_sentinel = object()
+    data_module = _DummyDataModule(train_loader=[object(), object()], val_loader=[object()])
+
+    def _load_config_stub(path):  # noqa: ANN001
+        return config_a if str(path).endswith("seed7.json") else config_b
+
+    monkeypatch.setattr("histoclass_cli.pipeline.load_config", _load_config_stub)
+    monkeypatch.setattr(
+        "histoclass_cli.pipeline.seed_everything",
+        lambda **kwargs: SeedState(
+            kwargs["seed"],
+            kwargs["deterministic"],
+            kwargs["benchmark"],
+            False,
+        ),
+    )
+    monkeypatch.setattr("histoclass_cli.pipeline.build_model", lambda _: model_sentinel)
+
+    counters: dict[str, int] = {"build_data_module": 0, "fit": 0}
+
+    def _build_data_module_stub(_):  # noqa: ANN001
+        counters["build_data_module"] += 1
+        return data_module
+
+    class _TrainerStub:
+        def __init__(self, *, model, config):  # noqa: ANN001
+            assert model is model_sentinel
+            assert config == config_a.trainer
+
+        def fit(self, loader):  # noqa: ANN001
+            counters["fit"] += 1
+            assert hasattr(loader, "__iter__")
+            checkpoint = tmp_path / f"epoch{counters['fit']:03d}.pt"
+            checkpoint.write_text("ok", encoding="utf-8")
+            epoch_result = type(
+                "EpochResultLike",
+                (),
+                {
+                    "epoch": 1,
+                    "train": type(
+                        "TrainLike", (), {"loss": 0.1, "metrics": _MetricsStub()}
+                    )(),
+                },
+            )()
+            return type(
+                "TrainSummaryLike",
+                (),
+                {"history": (epoch_result,), "final_checkpoint": checkpoint},
+            )()
+
+    monkeypatch.setattr("histoclass_cli.pipeline.build_data_module", _build_data_module_stub)
+    monkeypatch.setattr("histoclass_cli.pipeline.Trainer", _TrainerStub)
+
+    batch_result = run_batch_pipeline(
+        (
+            PipelineRequest(config_path="configs/seed7.json", mode=PipelineMode.TRAIN),
+            PipelineRequest(config_path="configs/seed99.json", mode=PipelineMode.TRAIN),
+        )
+    )
+
+    assert len(batch_result.results) == 2
+    assert counters["build_data_module"] == 2
+    assert counters["fit"] == 2
+
+
 def test_run_broadcast_stage_raises_without_deadlock_on_consumer_error() -> None:
     source_loader = [1, 2, 3, 4, 5]
 
@@ -225,3 +302,60 @@ def test_run_broadcast_stage_raises_without_deadlock_on_consumer_error() -> None
             source_loader=source_loader,
             jobs=(("bad", _bad_consumer),),
         )
+
+
+def test_run_broadcast_stage_supports_multi_pass_consumer() -> None:
+    source_loader = [1, 2, 3]
+    consumed: list[list[int]] = []
+
+    def _multi_pass_consumer(loader):  # noqa: ANN001
+        consumed.append(list(loader))
+        consumed.append(list(loader))
+
+    _run_broadcast_stage(
+        stage_name="train",
+        source_loader=source_loader,
+        jobs=(
+            _BroadcastJob(
+                name="multi-pass",
+                fn=_multi_pass_consumer,
+                passes=2,
+            ),
+        ),
+    )
+
+    assert consumed == [source_loader, source_loader]
+
+
+def test_run_broadcast_stage_warns_when_control_token_drops_batches(
+    monkeypatch,
+) -> None:
+    source_loader = list(range(9))
+    consumed: list[int] = []
+    warning_messages: list[str] = []
+
+    def _slow_consumer(loader):  # noqa: ANN001
+        first = True
+        for item in loader:
+            consumed.append(item)
+            if first:
+                first = False
+                import time
+
+                time.sleep(1.0)
+
+    def _warning_stub(message, *args):  # noqa: ANN001
+        warning_messages.append(message % args)
+
+    monkeypatch.setattr("histoclass_cli.pipeline.LOGGER.warning", _warning_stub)
+
+    _run_broadcast_stage(
+        stage_name="train",
+        source_loader=source_loader,
+        jobs=(("slow-consumer", _slow_consumer),),
+    )
+
+    assert len(consumed) < len(source_loader)
+    assert any("lossy approximate broadcast" in message for message in warning_messages)
+    assert any("epoch_token" in message for message in warning_messages)
+    assert any("slow-consumer" in message for message in warning_messages)

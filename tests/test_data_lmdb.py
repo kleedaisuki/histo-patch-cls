@@ -2,8 +2,10 @@ from pathlib import Path
 
 from PIL import Image
 import pytest
+import torch
 
-from histoclass.data import DataModuleConfig, LmdbSchema, LoaderSchema, SplitSchema, build_data_module
+from histoclass.data import Batch, DataModuleConfig, LmdbSchema, LoaderSchema, SplitSchema, build_data_module
+from histoclass.utils import seed_worker
 
 
 def _write_image(path: Path, color: tuple[int, int, int]) -> None:
@@ -107,3 +109,47 @@ def test_build_data_module_rewarms_when_use_caches_disabled(tmp_path, monkeypatc
     monkeypatch.setattr(Path, "read_bytes", _failing_read_bytes)
     with pytest.raises(RuntimeError, match="expected warmup"):
         build_data_module(config)
+
+
+def test_batch_pin_memory_pins_custom_batch_tensors() -> None:
+    if not torch.cuda.is_available():
+        pytest.skip("Pinned memory assertions require CUDA runtime support.")
+
+    batch = Batch(
+        images=torch.zeros((2, 3, 4, 4), dtype=torch.float32),
+        labels=torch.zeros((2,), dtype=torch.long),
+        patient_ids=("p1", "p2"),
+        paths=(Path("a.png"), Path("b.png")),
+    )
+
+    pinned = batch.pin_memory()
+
+    assert pinned.images.is_pinned()
+    assert pinned.labels.is_pinned()
+    assert pinned.patient_ids == batch.patient_ids
+    assert pinned.paths == batch.paths
+
+
+def test_build_data_module_wires_worker_seed_and_loader_generators(tmp_path) -> None:
+    image_root = tmp_path / "raw"
+    _write_image(image_root / "patient_a" / "0" / "a.png", (255, 0, 0))
+    _write_image(image_root / "patient_a" / "1" / "b.png", (0, 255, 0))
+    _write_image(image_root / "patient_b" / "0" / "c.png", (0, 0, 255))
+    _write_image(image_root / "patient_b" / "1" / "d.png", (255, 255, 0))
+
+    torch.manual_seed(123)
+    config = DataModuleConfig(
+        image_root=image_root,
+        split=SplitSchema(val_ratio=0.5, seed=1),
+        loader=LoaderSchema(batch_size=2, num_workers=0),
+        lmdb=LmdbSchema(enabled=False),
+    )
+
+    data_module = build_data_module(config)
+
+    assert data_module.train_loader.worker_init_fn is seed_worker
+    assert data_module.val_loader.worker_init_fn is seed_worker
+    assert data_module.train_loader.generator is not None
+    assert data_module.val_loader.generator is not None
+    assert data_module.train_loader.generator.initial_seed() == 123
+    assert data_module.val_loader.generator.initial_seed() == 124
