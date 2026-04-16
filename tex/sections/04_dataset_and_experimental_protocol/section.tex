@@ -1,36 +1,36 @@
 ﻿\section{Dataset and Experimental Protocol}
 \label{sec:dataset_protocol}
 
- 第~\ref{sec:problem_formulation} 节已经给出了 IDC 图像块分类任务的数学形式化，因此本节不再重复定义输入空间、患者分组结构或训练/验证划分的集合表达，而是转向协议层面的实例化分析。具体而言，我们首先讨论 IDC 数据集的本质属性，以及这些属性为何直接决定评估约束；随后描述从样本发现到模型输入的数据准备流水线；最后概述为保障运行稳定性与结果可复现性而引入的工程控制。换言之，本节回答的核心问题不是“任务在抽象上是什么”，而是“这一任务在真实数据与真实系统中应如何被严谨地实现”。
+第~\ref{sec:problem_formulation} 节已经给出了 IDC 图像块分类任务的数学形式化，因此本节不再重复定义输入空间、患者分组结构或训练/验证划分的集合表达，而是转向协议层面的实例化分析。具体而言，我们首先讨论 IDC 数据集的本质属性，以及这些属性为何直接决定评估约束；随后描述从样本发现到模型输入的数据准备流水线；最后概述为保障运行稳定性与结果可复现性而引入的工程控制。换言之，本节回答的核心问题不是“任务在抽象上是什么”，而是“这一任务在真实数据与真实系统中应如何被严谨地实现”。
 
 \subsection{IDC Breast Histopathology Dataset}
 
 本文采用 Kaggle 公开的 Breast Histopathology Images 数据集作为实验对象。该数据集来源于乳腺癌组织病理切片中裁剪得到的局部图像块，每个样本对应一个固定尺寸的 RGB patch 以及一个二元标签，用于表示该局部区域中是否包含浸润性导管癌（invasive ductal carcinoma, IDC）。形式上，单个样本记为
 \begin{equation}
-(x_i, y_i, p_i),
+    (x_i, y_i, p_i),
 \end{equation}
 其中，$x_i \in \mathbb{R}^{50 \times 50 \times 3}$ 为第 $i$ 个图像块，$y_i \in \{0,1\}$ 为二分类标签，$p_i$ 为对应患者标识。标签语义定义为
 \begin{equation}
-y_i =
-\begin{cases}
-1, & \text{if patch } x_i \text{ contains IDC tissue,}\\
-0, & \text{otherwise.}
-\end{cases}
+    y_i =
+    \begin{cases}
+        1, & \text{if patch } x_i \text{ contains IDC tissue,} \\
+        0, & \text{otherwise.}
+    \end{cases}
 \end{equation}
 
 与一般自然图像分类数据集不同，该数据集并非由语义上彼此独立的大尺寸图像组成，而是由病理切片中裁剪出来的大量微观局部区域构成。这意味着模型需要识别的是腺体结构、细胞排列、染色纹理与肿瘤侵袭模式等细粒度组织学模式，而不是大尺度场景语义。也正因为如此，端到端深度学习模型在该任务上的优势，不仅体现为从像素中自动学习判别特征，更体现为能够在统一优化目标下耦合低层纹理表示与高层病理判别边界。
 
 从数据统计上看，该数据集规模约为 $2.7 \times 10^5$ 个图像块，且阳性样本比例明显低于阴性样本，表现出典型的类别不平衡（class imbalance）特征。设总样本数为 $N$，阳性样本集合为
 \begin{equation}
-\mathcal{D}^{+} = \{(x_i,y_i,p_i) \in \mathcal{D} : y_i = 1\},
+    \mathcal{D}^{+} = \{(x_i,y_i,p_i) \in \mathcal{D} : y_i = 1\},
 \end{equation}
 阴性样本集合为
 \begin{equation}
-\mathcal{D}^{-} = \{(x_i,y_i,p_i) \in \mathcal{D} : y_i = 0\},
+    \mathcal{D}^{-} = \{(x_i,y_i,p_i) \in \mathcal{D} : y_i = 0\},
 \end{equation}
 则通常有
 \begin{equation}
-|\mathcal{D}^{+}| \ll |\mathcal{D}^{-}|.
+    |\mathcal{D}^{+}| \ll |\mathcal{D}^{-}|.
 \end{equation}
 这一性质意味着，若仅依赖总体准确率（accuracy）评价模型，则很容易高估其临床可用性。因此，后续实验中我们更加重视 F1-score、平衡准确率（Balanced Accuracy）与 ROC-AUC 等对不平衡数据更稳健的指标。
 
@@ -44,43 +44,43 @@ y_i =
 
 上述患者级切分完成后，我们将其后的样本发现、输入变换与 mini-batch 组织统一视为一条数据准备流水线（data preparation pipeline）。其核心目标是把原始文件系统中的非结构化图像对象，稳定地转换为可被模型消费、且便于分析与追踪的训练批次。为此，我们首先在数据根目录 $R$ 上执行递归发现（recursive discovery），并为每个合法图像路径构造样本记录
 \begin{equation}
-r_i = (\pi_i, y_i, p_i),
+    r_i = (\pi_i, y_i, p_i),
 \end{equation}
 其中，$\pi_i$ 为文件绝对路径，$y_i \in \{0,1\}$ 根据目录名解析得到，$p_i$ 为患者目录名。于是，原始文件集合被规整为统一记录集合
 \begin{equation}
-\mathcal{R} = \{r_i\}_{i=1}^{N}.
+    \mathcal{R} = \{r_i\}_{i=1}^{N}.
 \end{equation}
 这种从文件到记录的显式映射使样本总数、患者总数与类别分布可以在训练前被检查，也使后续数据集对象、采样器、缓存机制与 DataLoader 都建立在统一语义之上，而不必重复依赖文件系统结构做隐式解析。
 
 在输入变换层，我们采用刻意保持克制的基础视觉预处理与增强，以建立可解释、可复现的基线。训练阶段的变换定义为
 \begin{equation}
-T_{\mathrm{train}} = T_{\mathrm{norm}} \circ T_{\mathrm{tensor}} \circ T_{\mathrm{flip}} \circ T_{\mathrm{resize}},
+    T_{\mathrm{train}} = T_{\mathrm{norm}} \circ T_{\mathrm{tensor}} \circ T_{\mathrm{flip}} \circ T_{\mathrm{resize}},
 \end{equation}
 其中，$T_{\mathrm{resize}}$ 将图像重采样到固定尺度，$T_{\mathrm{flip}}$ 表示随机水平与垂直翻转，$T_{\mathrm{tensor}}$ 将 PIL 图像映射为张量，$T_{\mathrm{norm}}$ 执行逐通道归一化。若原始图像为 $x$，则归一化结果写为
 \begin{equation}
-\tilde{x}_{u,v,c} = \frac{x_{u,v,c} - \mu_c}{\sigma_c},
+    \tilde{x}_{u,v,c} = \frac{x_{u,v,c} - \mu_c}{\sigma_c},
 \end{equation}
 其中，$(u,v)$ 表示像素位置，$c \in \{1,2,3\}$ 为颜色通道，$\mu_c$ 与 $\sigma_c$ 为对应通道统计量。验证阶段则采用确定性变换
 \begin{equation}
-T_{\mathrm{val}} = T_{\mathrm{norm}} \circ T_{\mathrm{tensor}} \circ T_{\mathrm{resize}}.
+    T_{\mathrm{val}} = T_{\mathrm{norm}} \circ T_{\mathrm{tensor}} \circ T_{\mathrm{resize}}.
 \end{equation}
 也就是说，我们仅在训练时引入最基本的几何扰动，而不在基线阶段额外加入 stain normalization（染色归一化）、Color Jitter、MixUp、CutMix 或更复杂的病理专用增强，以避免把协议比较混淆为增强策略驱动的波动。
 
 在批次组织层，患者级切分之后的训练数据仍存在显著类别不平衡，因此我们同时保留采样层与损失层两类互补控制。设训练集中的类别计数为
 \begin{equation}
-N_{0} = |\{(x_i,y_i,p_i) \in \mathcal{D}_{\mathrm{train}} : y_i = 0\}|,
-\qquad
-N_{1} = |\{(x_i,y_i,p_i) \in \mathcal{D}_{\mathrm{train}} : y_i = 1\}|,
+    N_{0} = |\{(x_i,y_i,p_i) \in \mathcal{D}_{\mathrm{train}} : y_i = 0\}|,
+    \qquad
+    N_{1} = |\{(x_i,y_i,p_i) \in \mathcal{D}_{\mathrm{train}} : y_i = 1\}|,
 \end{equation}
 则加权随机采样（Weighted Random Sampling）为标签为 $y_i$ 的样本分配权重
 \begin{equation}
-w_i = \frac{1}{N_{y_i}},
+    w_i = \frac{1}{N_{y_i}},
 \end{equation}
 从而提高少数类在 mini-batch 中被观察到的频率。与此同时，我们也允许在带 logits 的二元交叉熵中使用正类权重 $\omega_{+}$，以调整不同类别误差的相对代价。前者改变样本曝光频率，后者改变目标函数代价结构；两者同时保留，使不平衡处理策略可以在统一协议下被比较，而无需改动模型主体。
 
 对于 mini-batch 本身，我们采用统一批次结构（batch schema）封装图像张量、标签张量、患者 ID 序列与样本路径序列。设批大小为 $B$，则训练批次表示为
 \begin{equation}
-\mathcal{B} = (\mathbf{X}, \mathbf{y}, \mathbf{p}, \mathbf{\Pi}),
+    \mathcal{B} = (\mathbf{X}, \mathbf{y}, \mathbf{p}, \mathbf{\Pi}),
 \end{equation}
 其中，$\mathbf{X} \in \mathbb{R}^{B \times C \times H \times W}$ 为图像张量，$\mathbf{y} \in \{0,1\}^{B}$ 为标签向量，$\mathbf{p}$ 为患者 ID 元组，$\mathbf{\Pi}$ 为路径元组。将患者标识与路径信息一并保留在批次结构中，不仅便于调试与错误分析，也为后续的 patient-level aggregation（患者级聚合）与 failure case analysis（失败案例分析）保留了直接接口。整体而言，这一小节中的各步骤并不是彼此独立的预处理技巧，而是共同构成了从样本发现到模型输入的完整数据准备协议。
 
@@ -90,32 +90,75 @@ w_i = \frac{1}{N_{y_i}},
 
 在数据访问层，我们使用基于 LMDB（Lightning Memory-Mapped Database）的缓存来削弱大规模 patch 训练中的文件系统随机读取抖动。设样本记录集合为 $\mathcal{R}=\{r_i\}_{i=1}^{N}$，其中每个记录包含路径 $\pi_i$，则缓存可表示为键值映射
 \begin{equation}
-\kappa : \pi_i \mapsto b_i,
+    \kappa : \pi_i \mapsto b_i,
 \end{equation}
 其中，$b_i$ 为对应图像的原始字节流。训练时，数据集优先通过 $\kappa(\pi_i)$ 在 LMDB 中读取样本；若缓存不可用，则退回文件系统读取。为了避免缓存状态成为未记录的隐性变量，我们进一步定义记录集合的指纹（fingerprint）
 \begin{equation}
-F(\mathcal{R}) = \mathrm{SHA256}\bigl(\{(\pi_i, s_i, t_i)\}_{i=1}^{N}\bigr),
+    F(\mathcal{R}) = \mathrm{SHA256}\bigl(\{(\pi_i, s_i, t_i)\}_{i=1}^{N}\bigr),
 \end{equation}
 其中，$s_i$ 与 $t_i$ 分别表示文件大小和最后修改时间戳。只有当记录数量、缓存路径、LMDB 配置与指纹一致时，已有缓存才会被复用；否则重新构建。这样，缓存既提供 I/O 稳定性与吞吐收益，也保持语义正确性和可解释性。
 
 在实验管理层，我们采用 dataclass 与 JSON 文件组成配置驱动（configuration-driven）的方案，将实验选择显式表示为顶层配置对象
 \begin{equation}
-\mathcal{C} = (\mathcal{C}_{\mathrm{data}}, \mathcal{C}_{\mathrm{model}}, \mathcal{C}_{\mathrm{train}}, \mathcal{C}_{\mathrm{eval}}, \mathcal{C}_{\mathrm{seed}}, \mathcal{C}_{\mathrm{log}}),
+    \mathcal{C} = (\mathcal{C}_{\mathrm{data}}, \mathcal{C}_{\mathrm{model}}, \mathcal{C}_{\mathrm{train}}, \mathcal{C}_{\mathrm{eval}}, \mathcal{C}_{\mathrm{seed}}, \mathcal{C}_{\mathrm{log}}),
 \end{equation}
 其中各子配置分别描述数据处理、模型结构、训练超参数、验证策略、随机性控制与日志路由。生效配置通过默认配置 $\mathcal{C}^{(0)}$ 与用户覆盖项 $\Delta \mathcal{C}$ 的深度合并（deep merge）得到：
 \begin{equation}
-\mathcal{C}^{\star} = \mathrm{Merge}(\mathcal{C}^{(0)}, \Delta \mathcal{C}).
+    \mathcal{C}^{\star} = \mathrm{Merge}(\mathcal{C}^{(0)}, \Delta \mathcal{C}).
 \end{equation}
 这种做法把实验定义从不可见的命令式状态中剥离出来，使“某次实验究竟做了什么”能够被序列化、比较、追踪与回放。
 
 在运行控制层，我们使用统一主随机种子 $s \in \mathbb{N}$ 管理 Python、NumPy、PyTorch 与 CUDA 的随机过程，即
 \begin{equation}
-s_{\mathrm{python}} = s_{\mathrm{numpy}} = s_{\mathrm{torch}} = s,
+    s_{\mathrm{python}} = s_{\mathrm{numpy}} = s_{\mathrm{torch}} = s,
 \end{equation}
 并为 DataLoader worker 派生兼容的子随机状态。与此同时，deterministic algorithms（确定性算法）与 cuDNN benchmark 两项开关被显式记录在配置中，用于在严格可复现性与运行效率之间进行受控权衡。日志方面，我们以统一格式记录样本发现、患者划分、缓存命中或重建、模型初始化、训练损失、checkpoint 保存与最终评估结果，使实验轨迹（execution trace）具备文本化、可审计的外显表示。模型状态方面，我们将 checkpoint 定义为
 \begin{equation}
-\Gamma_t = (t, \theta_t, \Omega_t, \Lambda_t, \mathcal{C}_{\mathrm{train}}, M_t),
+    \Gamma_t = (t, \theta_t, \Omega_t, \Lambda_t, \mathcal{C}_{\mathrm{train}}, M_t),
 \end{equation}
 其中，$t$ 为 epoch 编号，$\theta_t$ 为模型参数，$\Omega_t$ 为优化器状态，$\Lambda_t$ 为调度器状态，$M_t$ 为对应训练指标。由此，训练中断恢复、模型状态追踪以及结果归因都能建立在同一套显式记录之上。
 
 这些设计的共同价值不在于“工程做得更复杂”，而在于它们系统性地压缩了实验空间中的未观测自由度（unobserved degrees of freedom）：缓存规则防止 I/O 状态漂移，配置对象防止参数语义漂移，种子与后端开关约束随机性来源，日志与 checkpoint 则把运行轨迹和模型状态转化为可检查证据。也正因如此，我们将其合并为同一类工程性实验控制，而不是拆解为若干彼此孤立的小技巧。
+
+\subsection{Broadcast-Synchronized Execution for Concurrent Experiments}
+\label{subsec:broadcast_synchronized_execution}
+
+当实验进入批量比较（例如在相同数据协议下同时运行多个 backbone 或配置变体）时，系统瓶颈不再只来自模型计算，还来自数据通路在并发环境中的复制语义。对于类 Unix 平台，利用成熟内存映射（memory mapping）机制的优秀设计可以缓解这一问题，基于 \texttt{fork} 的写时复制（copy-on-write, COW）通常能够在进程派生初期暂时共享只读页，从而降低样本索引、路径表与运行时元数据的复制成本；但在 Windows 上，这类共享语义并不天然可用，批量实验更容易把原本逻辑上相同的数据描述重复物化为多个私有副本，元数据复制、DataLoader 组织与日志 I/O 的综合开销仍然会显著侵占用于模型比较的资源预算。基于这一动机，我们在应用层流水线中引入一种受单指令多线程（single-instruction multiple-thread, SIMT）思想启发的批量执行协议。其核心不是耦合多个实验的优化过程，而是让\emph{拥有同一数据配置}的多个请求共享同一条上游数据流，并仅在下游分叉为彼此独立的训练器（trainer）或评估器（evaluator）。设批量请求集合为
+\begin{equation}
+    \mathcal{Q} = \{q_1, q_2, \dots, q_M\},
+\end{equation}
+其中每个请求 $q_j$ 关联一个数据配置 $\mathcal{C}^{(j)}_{\mathrm{data}}$。我们首先按照数据配置等价关系进行分组：
+\begin{equation}
+    \mathcal{G}_k = \{q_j \in \mathcal{Q} : \mathcal{C}^{(j)}_{\mathrm{data}} = \mathcal{C}^{(k)}_{\mathrm{data}}\}.
+\end{equation}
+对于同一组 $\mathcal{G}_k$，系统只构造一个 DataModule 与一个源加载器（source loader）$L_k$，然后将由 $L_k$ 产生的 batch 序列
+\begin{equation}
+    \mathcal{S}_k = (B_1, B_2, \dots, B_T)
+\end{equation}
+广播（broadcast）到多个消费者线程。于是，对任意属于该组的实验请求 $q_j$，其训练或评估过程不再从私有数据加载器读取，而是消费来自同一上游源流的副本
+\begin{equation}
+    \mathcal{S}_k^{(j)} \equiv \mathcal{S}_k.
+\end{equation}
+这里的“等价”仅指输入 batch 的次序与内容一致，而不意味着消费者之间共享优化器、模型参数或随机状态；每个消费者仍维护独立的训练轨迹与 checkpoint，因此实验隔离性保持不变，而数据准备的重复成本被压缩。
+
+更重要的是，这种广播不是按 step 强制锁步（lock-step）同步，而是按训练轮次（epoch）设置同步边界。源加载器每完整遍历一次训练集，就向对应消费者队列注入一个 epoch token（轮次边界标记）；消费者据此结束当前轮次，并在需要时进入下一轮消费。若记第 $j$ 个训练请求所需 epoch 数为 $E_j$，则该消费者对源加载器的总消费轮数满足
+\begin{equation}
+    P_j = E_j.
+\end{equation}
+整个广播阶段仅需令共享源流重复
+\begin{equation}
+    P_{\max} = \max_j P_j
+\end{equation}
+次，即可满足组内所有实验的训练需求。这样做带来两点直接收益：其一，数据元信息、样本路径解析与 DataLoader 编排只需建立一次，从而降低宿主内存占用；其二，多个模型变体在每一轮接收同构输入序列，使配置比较更接近“仅改变模型或超参数，而不改变上游数据暴露轨迹”的受控实验。
+
+与数据广播相配套，日志系统也被显式设计为生产者-消费者（producer-consumer）结构。具体而言，所有模块级 logger 并不直接向终端或文件执行 I/O，而是先通过队列处理器（QueueHandler）将日志记录写入全局日志队列
+\begin{equation}
+    \mathcal{L} = \{\ell_1, \ell_2, \dots\},
+\end{equation}
+再由单个后台监听器（QueueListener）顺序地将其分发到 stdout、stderr 或文件等目标 sink。于是，工作线程承担的仅是轻量级入队操作，而真正可能造成阻塞的格式化、流路由与文件写入则被集中到独立消费者侧完成。若把第 $n$ 条日志记录记为 $\ell_n$，则系统保证其经历如下两阶段映射：
+\begin{equation}
+    \ell_n \xrightarrow{\text{enqueue}} \mathcal{L} \xrightarrow{\text{dequeue \& route}} \mathrm{sink}(\ell_n).
+\end{equation}
+这一异步日志设计的价值不仅在于线程安全（thread safety），更在于它最小化了训练线程中的串行区（critical serial region）：模型训练不必在每次记录 loss、metric 或 checkpoint 事件时等待底层 I/O 完成，从而减少日志系统对吞吐与时序稳定性的反向扰动。同时，由于最终写出仍由单一监听器顺序完成，日志文本在全局上保持统一格式与可审计的时间序列结构。
+
+从实验协议的角度看，数据广播与异步日志并非附属优化，而是面向跨平台高性能执行（cross-platform high-performance execution）的基础设施约束。前者抑制并发实验对内存与数据管线的重复消耗，后者抑制并发运行对日志输出路径的竞争；两者共同保证批量比较能够在不同平台的复制语义与 I/O 行为并不相同的前提下，仍然以可扩展、可审计且资源开销可控的方式稳定完成。
