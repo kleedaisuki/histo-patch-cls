@@ -9,6 +9,6 @@
 
 基于这一问题意识，本文关注的重点不是提出额外复杂的网络模块，而是在 IDC patch classification 任务上建立一个\emph{协议严格（protocol-aware）、配置驱动（configuration-driven）、结果可复现（reproducible）}的实验框架。围绕 Kaggle 公开的 Breast Histopathology Images 数据集，我们在数据层显式采用 patient-wise split，以保证同一患者的 patch 不跨越训练集与验证集；在系统层以 \texttt{PyTorch} 和 \texttt{Python~3.11} 为基础，将数据发现、缓存、模型构建、训练、评估、配置解析与应用层编排解耦，并使用 \texttt{dataclass} 统一承载配置，从而形成单向、可追踪的数据流。这样做的目标不是追求架构新奇性，而是先把实验边界、运行语义与结果归因关系建立清楚，使后续比较建立在可复核的协议之上。
 
-在此基础上，本文采用可切换的预训练 ResNet 主干网络（backbone）与轻量分类头构建端到端基线，并在统一设置下组织两类彼此相关的经验比较：其一是不同 backbone 的基线比较，用以观察标准深度模型在严格 patient-wise 设定下能够达到的性能边界；其二是 patient-wise 与 patch-wise 两种切分协议的比较，用以检验评估边界变化会如何影响训练表现与验证表现之间的对应关系。与此同时，针对 IDC 数据中的类别不平衡（class imbalance），本文在数据与优化两侧同时保留 weighted sampler 与损失加权等控制手段，以便在同一实验框架内讨论召回率（recall）、特异度（specificity）、F1-score 与 Balanced Accuracy 等指标之间的权衡。
+在此基础上，本文采用可切换的预训练 ResNet 主干网络（backbone）与轻量分类头构建端到端基线，并在统一设置下组织三类彼此相关的经验比较：其一是不同 backbone 的基线比较，用以观察标准深度模型在严格 patient-wise 设定下能够达到的性能边界；其二是 patient-wise 与 patch-wise 两种切分协议的比较，用以检验评估边界变化会如何影响训练表现与验证表现之间的对应关系；其三是围绕类别不平衡（class imbalance）的消融实验，用以比较 weighted sampler 与损失加权（loss weighting）分别作用于采样分布与优化目标时，对召回率（recall）、特异度（specificity）、F1-score 与 Balanced Accuracy 所产生的系统性影响。与此同时，本文在数据与优化两侧同时保留这些控制手段，以便在同一实验框架内讨论不同干预位置带来的收益与代价。
 
 进一步地，本文并不把这些设计仅仅视为若干工程安排，而是通过问题形式化与优化分析，将 patient-grouped distribution、代价敏感训练（cost-sensitive training）与阈值化决策（thresholded decision rule）置于统一表述之下。换言之，本文希望强调的是：在数字病理这类高相关、强异质的数据环境中，可信结论不仅依赖于模型本身，还依赖于实验协议、数据流治理、理论表述与工程实现之间是否保持一致。基于这一立场，本文旨在为 IDC patch classification 提供一个可复验、可扩展且便于后续消融与比较的实证研究基线；其与既有工作的具体关系与本文定位，将在下一节结合相关研究进一步讨论。
