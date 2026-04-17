@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+import gc
 import json
 import queue
 from pathlib import Path
@@ -210,6 +211,32 @@ def _format_thread_stack(thread: threading.Thread) -> str:
     return "".join(traceback.format_stack(frame))
 
 
+def _release_loader_resources(loader: Any, *, loader_name: str) -> None:
+    """@brief 显式释放 DataLoader worker 资源；Explicitly release DataLoader worker resources.
+
+    @param loader 待释放的 DataLoader 或兼容对象；Target DataLoader-like object.
+    @param loader_name 日志标识名；Human-readable loader name for logs.
+    @note
+      对于 persistent_workers=True 的 DataLoader，内部 iterator 可能长期持有 worker 进程。
+      本函数会尝试调用私有 shutdown 接口并清空 `_iterator`，以便提前释放训练阶段资源。
+    """
+    iterator = getattr(loader, "_iterator", None)
+    if iterator is None:
+        return
+
+    shutdown = getattr(iterator, "_shutdown_workers", None)
+    if callable(shutdown):
+        try:
+            shutdown()
+        except Exception:  # pragma: no cover - defensive cleanup path
+            LOGGER.exception("Failed to shutdown workers for %s", loader_name)
+
+    try:
+        setattr(loader, "_iterator", None)
+    except Exception:  # pragma: no cover - defensive cleanup path
+        LOGGER.debug("Failed to clear DataLoader iterator handle for %s", loader_name)
+
+
 def run_pipeline(request: PipelineRequest) -> PipelineResult:
     """@brief 运行应用层 pipeline；Run application-level pipeline.
 
@@ -230,6 +257,8 @@ def run_pipeline(request: PipelineRequest) -> PipelineResult:
     )
 
     data_module = build_data_module(config.data)
+    train_loader = data_module.train_loader
+    val_loader = data_module.val_loader
     model = build_model(config.model)
 
     checkpoint_path = _resolve_checkpoint_path(
@@ -242,15 +271,26 @@ def run_pipeline(request: PipelineRequest) -> PipelineResult:
     train_summary: TrainSummary | None = None
     evaluation: EvaluationResult | None = None
 
-    if request.mode in (PipelineMode.TRAIN, PipelineMode.TRAIN_EVAL):
-        trainer = Trainer(model=model, config=config.trainer)
-        train_summary = trainer.fit(data_module.train_loader)
-        if train_summary.final_checkpoint is not None:
-            checkpoint_path = train_summary.final_checkpoint
+    try:
+        if request.mode in (PipelineMode.TRAIN, PipelineMode.TRAIN_EVAL):
+            trainer = Trainer(model=model, config=config.trainer)
+            train_summary = trainer.fit(train_loader)
+            if train_summary.final_checkpoint is not None:
+                checkpoint_path = train_summary.final_checkpoint
 
-    if request.mode in (PipelineMode.EVAL, PipelineMode.TRAIN_EVAL):
-        evaluator = Evaluator(model=model, config=config.evaluator)
-        evaluation = evaluator.evaluate(data_module.val_loader)
+        if request.mode in (PipelineMode.EVAL, PipelineMode.TRAIN_EVAL):
+            if request.mode == PipelineMode.TRAIN_EVAL:
+                _release_loader_resources(train_loader, loader_name="run_pipeline.train_loader")
+                train_loader = None
+                del data_module
+                gc.collect()
+
+            evaluator = Evaluator(model=model, config=config.evaluator)
+            evaluation = evaluator.evaluate(val_loader)
+    finally:
+        if train_loader is not None:
+            _release_loader_resources(train_loader, loader_name="run_pipeline.train_loader")
+        _release_loader_resources(val_loader, loader_name="run_pipeline.val_loader")
 
     _log_pipeline_summary(
         mode=request.mode,
@@ -338,51 +378,75 @@ def run_batch_pipeline(requests: Sequence[PipelineRequest]) -> BatchPipelineResu
                 cache_key,
             )
 
-        train_items = [
-            item
-            for item in group_items
-            if item.request.mode in (PipelineMode.TRAIN, PipelineMode.TRAIN_EVAL)
-        ]
-        if train_items:
-            train_jobs = [
-                _BroadcastJob(
-                    name=f"train-worker-{item.index}",
-                    fn=_build_train_worker(item),
-                    passes=item.config.trainer.epochs,
-                )
-                for item in train_items
-            ]
-            _run_broadcast_stage(
-                stage_name="train",
-                source_loader=data_module.train_loader,
-                jobs=train_jobs,
-            )
-            for item in train_items:
-                if (
-                    item.train_summary is not None
-                    and item.train_summary.final_checkpoint is not None
-                ):
-                    item.checkpoint_path = item.train_summary.final_checkpoint
+        train_source_loader = data_module.train_loader
+        val_source_loader = data_module.val_loader
 
-        eval_items = [
-            item
-            for item in group_items
-            if item.request.mode in (PipelineMode.EVAL, PipelineMode.TRAIN_EVAL)
-        ]
-        if eval_items:
-            eval_jobs = [
-                _BroadcastJob(
-                    name=f"eval-worker-{item.index}",
-                    fn=_build_eval_worker(item),
-                    passes=1,
-                )
-                for item in eval_items
+        try:
+            train_items = [
+                item
+                for item in group_items
+                if item.request.mode in (PipelineMode.TRAIN, PipelineMode.TRAIN_EVAL)
             ]
-            _run_broadcast_stage(
-                stage_name="eval",
-                source_loader=data_module.val_loader,
-                jobs=eval_jobs,
+            if train_items:
+                train_jobs = [
+                    _BroadcastJob(
+                        name=f"train-worker-{item.index}",
+                        fn=_build_train_worker(item),
+                        passes=item.config.trainer.epochs,
+                    )
+                    for item in train_items
+                ]
+                _run_broadcast_stage(
+                    stage_name="train",
+                    source_loader=train_source_loader,
+                    jobs=train_jobs,
+                )
+                for item in train_items:
+                    if (
+                        item.train_summary is not None
+                        and item.train_summary.final_checkpoint is not None
+                    ):
+                        item.checkpoint_path = item.train_summary.final_checkpoint
+
+            eval_items = [
+                item
+                for item in group_items
+                if item.request.mode in (PipelineMode.EVAL, PipelineMode.TRAIN_EVAL)
+            ]
+            if eval_items:
+                _release_loader_resources(
+                    train_source_loader,
+                    loader_name=f"run_batch_pipeline.train_loader[{cache_key}]",
+                )
+                train_source_loader = None
+                data_module_cache.pop(cache_key, None)
+                del data_module
+                gc.collect()
+
+                eval_jobs = [
+                    _BroadcastJob(
+                        name=f"eval-worker-{item.index}",
+                        fn=_build_eval_worker(item),
+                        passes=1,
+                    )
+                    for item in eval_items
+                ]
+                _run_broadcast_stage(
+                    stage_name="eval",
+                    source_loader=val_source_loader,
+                    jobs=eval_jobs,
+                )
+        finally:
+            if train_source_loader is not None:
+                _release_loader_resources(
+                    train_source_loader,
+                    loader_name=f"run_batch_pipeline.train_loader[{cache_key}]",
+                )
+            _release_loader_resources(
+                val_source_loader,
+                loader_name=f"run_batch_pipeline.val_loader[{cache_key}]",
             )
+            data_module_cache.pop(cache_key, None)
 
     ordered = sorted(prepared, key=lambda item: item.index)
     results: list[PipelineResult] = []
