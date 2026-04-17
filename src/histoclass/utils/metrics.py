@@ -104,25 +104,51 @@ def compute_binary_metrics(
     if not (0.0 <= threshold <= 1.0):
         raise ValueError(f"threshold must be in [0, 1], got {threshold}.")
 
-    prediction_tensor = (score_tensor >= threshold).to(dtype=torch.long)
     target_long = target_tensor.to(dtype=torch.long)
+    prediction_tensor = (score_tensor >= threshold).to(dtype=torch.long)
 
-    true_positive = int(((prediction_tensor == 1) & (target_long == 1)).sum().item())
-    true_negative = int(((prediction_tensor == 0) & (target_long == 0)).sum().item())
-    false_positive = int(((prediction_tensor == 1) & (target_long == 0)).sum().item())
-    false_negative = int(((prediction_tensor == 0) & (target_long == 1)).sum().item())
+    true_positive_tensor = ((prediction_tensor == 1) & (target_long == 1)).sum()
+    true_negative_tensor = ((prediction_tensor == 0) & (target_long == 0)).sum()
+    false_positive_tensor = ((prediction_tensor == 1) & (target_long == 0)).sum()
+    false_negative_tensor = ((prediction_tensor == 0) & (target_long == 1)).sum()
 
-    positives = int((target_long == 1).sum().item())
-    negatives = int((target_long == 0).sum().item())
-    support = int(target_long.numel())
+    positives_tensor = (target_long == 1).sum()
+    negatives_tensor = (target_long == 0).sum()
+    support_tensor = torch.as_tensor(
+        target_long.numel(),
+        device=target_long.device,
+        dtype=torch.int64,
+    )
 
-    accuracy = _safe_divide(true_positive + true_negative, support)
-    precision = _safe_divide(true_positive, true_positive + false_positive)
-    recall = _safe_divide(true_positive, true_positive + false_negative)
-    specificity = _safe_divide(true_negative, true_negative + false_positive)
-    f1 = _safe_divide(2.0 * precision * recall, precision + recall)
-    balanced_accuracy = (recall + specificity) / 2.0
+    tp = true_positive_tensor.to(dtype=torch.float64)
+    tn = true_negative_tensor.to(dtype=torch.float64)
+    fp = false_positive_tensor.to(dtype=torch.float64)
+    fn = false_negative_tensor.to(dtype=torch.float64)
+    support_float = support_tensor.to(dtype=torch.float64)
+
+    accuracy_tensor = _safe_divide_tensor(tp + tn, support_float)
+    precision_tensor = _safe_divide_tensor(tp, tp + fp)
+    recall_tensor = _safe_divide_tensor(tp, tp + fn)
+    specificity_tensor = _safe_divide_tensor(tn, tn + fp)
+    f1_tensor = _safe_divide_tensor(
+        2.0 * precision_tensor * recall_tensor, precision_tensor + recall_tensor
+    )
+    balanced_accuracy_tensor = (recall_tensor + specificity_tensor) / 2.0
     roc_auc = _binary_roc_auc(target_long, score_tensor)
+
+    true_positive = int(true_positive_tensor.item())
+    true_negative = int(true_negative_tensor.item())
+    false_positive = int(false_positive_tensor.item())
+    false_negative = int(false_negative_tensor.item())
+    positives = int(positives_tensor.item())
+    negatives = int(negatives_tensor.item())
+    support = int(support_tensor.item())
+    accuracy = float(accuracy_tensor.item())
+    precision = float(precision_tensor.item())
+    recall = float(recall_tensor.item())
+    specificity = float(specificity_tensor.item())
+    f1 = float(f1_tensor.item())
+    balanced_accuracy = float(balanced_accuracy_tensor.item())
 
     if roc_auc is None:
         LOGGER.warning(
@@ -217,16 +243,15 @@ def _binary_roc_auc(targets: Tensor, probabilities: Tensor) -> float | None:
     return float(max(0.0, min(1.0, auc)))
 
 
-def _safe_divide(numerator: float, denominator: float) -> float:
-    """@brief 安全除法；Perform a divide with zero-denominator guard.
+def _safe_divide_tensor(numerator: Tensor, denominator: Tensor) -> Tensor:
+    """@brief 张量安全除法；Tensor divide with zero-denominator guard.
 
-    @param numerator 分子；Numerator.
-    @param denominator 分母；Denominator.
-    @return 商值，若分母为 0 则返回 0；Quotient or 0.0 for zero denominator.
+    @param numerator 分子张量；Numerator tensor.
+    @param denominator 分母张量；Denominator tensor.
+    @return 商值张量，分母为 0 时返回 0；Quotient tensor or 0 when denominator is zero.
     """
-    if denominator == 0:
-        return 0.0
-    return float(numerator / denominator)
+    zero = torch.zeros((), dtype=numerator.dtype, device=numerator.device)
+    return torch.where(denominator == 0, zero, numerator / denominator)
 
 
 __all__ = ["BinaryMetrics", "compute_binary_metrics"]
