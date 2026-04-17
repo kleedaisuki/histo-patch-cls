@@ -7,7 +7,7 @@ from enum import Enum
 import gc
 import json
 import queue
-from pathlib import Path
+from pathlib import Path, WindowsPath
 import sys
 import threading
 import traceback
@@ -712,7 +712,8 @@ def _load_model_checkpoint(*, model: torch.nn.Module, checkpoint_path: Path) -> 
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
 
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    with torch.serialization.safe_globals([WindowsPath]):
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
     state_dict = checkpoint.get("model_state_dict")
     if not isinstance(state_dict, dict):
         raise KeyError("Checkpoint payload misses key 'model_state_dict'.")

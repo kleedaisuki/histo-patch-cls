@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import torch
 from torch import Tensor, nn
@@ -269,6 +269,7 @@ class Trainer:
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         checkpoint_path = checkpoint_dir / f"epoch{epoch:03d}.pt"
+        trainer_config_payload = _to_checkpoint_serializable(asdict(self.config))
 
         payload = {
             "epoch": epoch,
@@ -277,13 +278,36 @@ class Trainer:
             "scheduler_state_dict": (
                 self.scheduler.state_dict() if self.scheduler else None
             ),
-            "trainer_config": asdict(self.config),
+            "trainer_config": trainer_config_payload,
             "train_loss": train_result.loss,
             "train_metrics": train_result.metrics.to_dict(),
         }
         torch.save(payload, checkpoint_path)
         LOGGER.info("Checkpoint saved: %s", checkpoint_path)
         return checkpoint_path
+
+
+def _to_checkpoint_serializable(value: Any) -> Any:
+    """@brief 将 checkpoint 元数据递归转为可序列化基础类型；Recursively normalize checkpoint metadata to serializable primitives.
+
+    @param value 任意输入对象；Input value of arbitrary type.
+    @return 将 Path 转为字符串后的对象；Object with Path values converted to strings.
+    @note 仅清洗 metadata，模型权重 tensor 不会经过此函数；Only metadata is normalized, model weight tensors are not processed here.
+    """
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            _to_checkpoint_serializable(key): _to_checkpoint_serializable(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, tuple):
+        return tuple(_to_checkpoint_serializable(item) for item in value)
+    if isinstance(value, list):
+        return [_to_checkpoint_serializable(item) for item in value]
+    if isinstance(value, set):
+        return {_to_checkpoint_serializable(item) for item in value}
+    return value
 
 
 def _finalize_phase_result(
