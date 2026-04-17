@@ -1,7 +1,7 @@
 \section{Experiments}
 \label{sec:experiments}
 
-前文已经分别从问题定义、数据协议与方法实现层面对 IDC patch classification 的实验前提进行了形式化刻画，因此本节不再重复训练流水线或配置项本身，而是集中报告经验结果。具体而言，本节围绕两个实验问题展开：其一，在统一 patient-wise 协议下，不同 ResNet 主干网络（backbone）的性能表现有何差异；其二，当数据划分策略由 patient-wise split 改为 patch-wise random split 时，训练集与验证集上的指标会呈现出怎样的变化。
+前文已经分别从问题定义、数据协议与方法实现层面对 IDC patch classification 的实验前提进行了形式化刻画，因此本节不再重复训练流水线或配置项本身，而是集中报告经验结果。具体而言，本节围绕三个实验问题展开：其一，在统一 patient-wise 协议下，不同 ResNet 主干网络（backbone）的性能表现有何差异；其二，当数据划分策略由 patient-wise split 改为 patch-wise random split 时，训练集与验证集上的指标会呈现出怎样的变化；其三，在阳性比例约为 $28\%$ 的类别不平衡条件下，从采样分布与损失函数两个位置施加干预，会如何改变召回率、特异度以及综合指标之间的权衡关系。
 
 \subsection{Backbone Baseline Comparison}
 
@@ -29,3 +29,15 @@
 \end{itemize}
 
 表中的现象为后续讨论实验协议带来的评估差异提供了直接经验基础。
+
+\subsection{Class-Imbalance Ablation: Weighted Sampler vs. \texttt{pos\_weight}}
+
+在固定 patient-wise split 与 backbone 的前提下，我们进一步考察两种类别不平衡处理策略：一类是在数据层使用 weighted sampler 改变 mini-batch 的正负样本构成，另一类是在优化层通过 \texttt{BCEWithLogitsLoss} 的 \texttt{pos\_weight} 提高正类错误的代价。二者虽然都服务于少数类学习，但干预位置并不相同，前者决定模型在训练中更频繁“看见什么”，后者决定模型在优化时“错什么更疼”；因此，它们并不是重复实验，而是对同一问题的两种机制性处理。
+
+\input{tables/imbalance_ablation_comparison}
+
+从 \cref{tab:imbalance_ablation_comparison} 可以看到，两种 backbone 上都呈现出相似趋势。首先，启用 weighted sampler 后，召回率与 Balanced Accuracy 普遍上升，其中 ResNet-18 的召回率由 $0.9299$ 提升到 $0.9707$，ResNet-50 由 $0.9520$ 提升到 $0.9831$，且两者的 Balanced Accuracy 均达到各自最优。这说明从采样分布入手，能够在不完全牺牲整体判别能力的前提下，更稳定地改善少数类覆盖。
+
+其次，单独启用 \texttt{pos\_weight} 同样会显著推高召回率，但其特异度下降更明显，且 F1-score 未超过对应 backbone 的基线。进一步将两种策略同时开启后，召回率达到全表最高，分别为 $0.9837$ 与 $0.9894$；然而，这种组合也带来了最显著的特异度回落，并使 F1-score 相比基线进一步下降。换言之，双重加权会把决策边界更强地推向正类一侧，从而形成“高召回、低特异度”的代价敏感解。
+
+综合而言，如果目标是获得更稳健的综合表现，weighted sampler 在当前设置下是更平衡的选择；如果任务更强调漏检代价（false negative cost），则 \texttt{pos\_weight} 或其与 sampler 的组合能够进一步提升召回率，但需要明确接受特异度与精确率（precision）的折损。这一结果也从经验层面支持了本文对两类干预位置的区分：weighted sampler 主要改变训练分布，而 \texttt{pos\_weight} 主要改变优化景观（optimization landscape）。

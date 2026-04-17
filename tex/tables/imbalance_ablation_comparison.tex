@@ -1,0 +1,24 @@
+\begin{table}[t]
+    \centering
+    \small
+    \setlength{\tabcolsep}{4pt}
+    \caption{类别不平衡（class imbalance）消融实验：\texttt{weighted sampler} 与 \texttt{pos\_weight} 的干预位置比较。所有实验均采用 patient-wise split、固定阈值 $0.5$、训练 $20$ 个 epoch，并仅改变类别不平衡处理策略；其中 \texttt{weighted sampler} 通过重采样改变 mini-batch 中“看见什么”，\texttt{pos\_weight} 通过代价敏感损失（cost-sensitive loss）改变“错什么更疼”。表中粗体标出同一 backbone 下各指标最优值。}
+    \label{tab:imbalance_ablation_comparison}
+    \begin{tabularx}{\textwidth}{@{}l>{\raggedright\arraybackslash}Xccccc@{}}
+        \toprule
+        Backbone & Setting & Recall $\uparrow$ & Spec. $\uparrow$ & F1 $\uparrow$ & BAcc. $\uparrow$ & AUC $\uparrow$ \\
+        \midrule
+        \multicolumn{7}{l}{\textbf{ResNet-18}} \\
+        & Baseline & 0.9299 & \textbf{0.9822} & \textbf{0.9432} & 0.9560 & 0.9939 \\
+        & Sampler & 0.9707 & 0.9622 & 0.9426 & \textbf{0.9665} & \textbf{0.9943} \\
+        & \texttt{pos\_weight} & 0.9616 & 0.9590 & 0.9345 & 0.9603 & 0.9922 \\
+        & Sampler + \texttt{pos\_weight} & \textbf{0.9837} & 0.9345 & 0.9203 & 0.9591 & 0.9919 \\
+        \addlinespace[0.35em]
+        \multicolumn{7}{l}{\textbf{ResNet-50}} \\
+        & Baseline & 0.9520 & \textbf{0.9920} & \textbf{0.9661} & 0.9720 & \textbf{0.9979} \\
+        & Sampler & 0.9831 & 0.9745 & 0.9624 & \textbf{0.9788} & 0.9977 \\
+        & \texttt{pos\_weight} & 0.9830 & 0.9702 & 0.9575 & 0.9766 & 0.9976 \\
+        & Sampler + \texttt{pos\_weight} & \textbf{0.9894} & 0.9616 & 0.9515 & 0.9755 & 0.9970 \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
